@@ -10,13 +10,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.narratorapp.R
 import com.example.narratorapp.narration.TTSManager
-import com.example.narratorapp.voice.VoiceCommandManager
 
-
-/**
- * Foreground service for continuous voice command listening
- * Keeps the app listening for hotword even when in background
- */
 class VoiceCommandService : Service() {
     
     private val binder = LocalBinder()
@@ -31,9 +25,6 @@ class VoiceCommandService : Service() {
         const val ACTION_START_LISTENING = "com.example.narratorapp.START_LISTENING"
         const val ACTION_STOP_LISTENING = "com.example.narratorapp.STOP_LISTENING"
         
-        /**
-         * Start the voice command service
-         */
         fun start(context: Context) {
             val intent = Intent(context, VoiceCommandService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -43,9 +34,6 @@ class VoiceCommandService : Service() {
             }
         }
         
-        /**
-         * Stop the voice command service
-         */
         fun stop(context: Context) {
             val intent = Intent(context, VoiceCommandService::class.java)
             context.stopService(intent)
@@ -74,19 +62,11 @@ class VoiceCommandService : Service() {
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START_LISTENING -> {
-                startListening()
-            }
-            ACTION_STOP_LISTENING -> {
-                stopListening()
-            }
-            else -> {
-                // Default: start listening
-                startListening()
-            }
+            ACTION_START_LISTENING -> startListening()
+            ACTION_STOP_LISTENING -> stopListening()
+            else -> startListening()
         }
-        
-        return START_STICKY // Restart service if killed
+        return START_STICKY
     }
     
     override fun onBind(intent: Intent?): IBinder {
@@ -96,22 +76,17 @@ class VoiceCommandService : Service() {
     fun startListening() {
         voiceCommandManager.startListening()
         updateNotification(true)
-        Log.d("VoiceCommandService", "Started listening for commands")
     }
     
     fun stopListening() {
         voiceCommandManager.stopListening()
         updateNotification(false)
-        Log.d("VoiceCommandService", "Stopped listening for commands")
     }
     
     fun isListening(): Boolean {
         return voiceCommandManager.isCurrentlyListening()
     }
     
-    /**
-     * Set callback for when commands are recognized
-     */
     fun setCommandCallback(callback: (VoiceCommand) -> Unit) {
         commandCallback = callback
     }
@@ -133,36 +108,15 @@ class VoiceCommandService : Service() {
     }
     
     private fun createNotification(isListening: Boolean): Notification {
-        val stopIntent = Intent(this, VoiceCommandService::class.java).apply {
-            action = ACTION_STOP_LISTENING
-        }
-        val stopPendingIntent = PendingIntent.getService(
-            this, 0, stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        val startIntent = Intent(this, VoiceCommandService::class.java).apply {
-            action = ACTION_START_LISTENING
-        }
-        val startPendingIntent = PendingIntent.getService(
-            this, 1, startIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
         val title = if (isListening) "Voice Commands Active" else "Voice Commands Paused"
         val text = if (isListening) "Say 'Hey Narrator' to give commands" else "Tap to resume"
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
-            .setSmallIcon(R.drawable.ic_mic) // You'll need to add this icon
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
-            .addAction(
-                if (isListening) R.drawable.ic_pause else R.drawable.ic_play,
-                if (isListening) "Pause" else "Resume",
-                if (isListening) stopPendingIntent else startPendingIntent
-            )
             .build()
     }
     

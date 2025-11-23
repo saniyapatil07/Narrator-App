@@ -5,36 +5,23 @@ import androidx.room.PrimaryKey
 import com.google.ar.core.Pose
 import kotlin.math.sqrt
 
-
-/**
- * Represents a navigation waypoint with spatial position
- */
 @Entity(tableName = "waypoints")
 data class Waypoint(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    
-    // Spatial coordinates (ARCore pose components)
     val x: Float,
     val y: Float,
     val z: Float,
-    val qx: Float, // Quaternion x for orientation
-    val qy: Float, // Quaternion y
-    val qz: Float, // Quaternion z
-    val qw: Float, // Quaternion w
-    
-    // Metadata
-    val label: String, // "Turn left", "Entrance", "Stairs ahead"
+    val qx: Float,
+    val qy: Float,
+    val qz: Float,
+    val qw: Float,
+    val label: String,
     val description: String = "",
     val timestamp: Long = System.currentTimeMillis(),
-    val routeId: String? = null, // Group waypoints into routes
-    
-    // Navigation properties
+    val routeId: String? = null,
     val isDestination: Boolean = false,
     val obstacleDetected: Boolean = false
 ) {
-    /**
-     * Convert to ARCore Pose
-     */
     fun toPose(): Pose {
         return Pose(
             floatArrayOf(x, y, z),
@@ -42,9 +29,6 @@ data class Waypoint(
         )
     }
     
-    /**
-     * Calculate straight-line distance to another waypoint
-     */
     fun distanceTo(other: Waypoint): Float {
         val dx = x - other.x
         val dy = y - other.y
@@ -52,19 +36,7 @@ data class Waypoint(
         return sqrt(dx * dx + dy * dy + dz * dz)
     }
     
-    /**
-     * Calculate 2D distance (ignore height)
-     */
-    fun distanceTo2D(other: Waypoint): Float {
-        val dx = x - other.x
-        val dz = z - other.z
-        return sqrt(dx * dx + dz * dz)
-    }
-    
     companion object {
-        /**
-         * Create waypoint from ARCore Pose
-         */
         fun fromPose(pose: Pose, label: String, description: String = ""): Waypoint {
             val translation = pose.translation
             val rotation = pose.rotationQuaternion
@@ -83,9 +55,6 @@ data class Waypoint(
     }
 }
 
-/**
- * A complete route with multiple waypoints
- */
 data class NavigationRoute(
     val id: String,
     val name: String,
@@ -94,35 +63,13 @@ data class NavigationRoute(
     val endLocation: String = "",
     val createdAt: Long = System.currentTimeMillis()
 ) {
-    /**
-     * Total route distance
-     */
     fun totalDistance(): Float {
         return waypoints.zipWithNext().sumOf { (a, b) ->
             a.distanceTo(b).toDouble()
         }.toFloat()
     }
-    
-    /**
-     * Get next waypoint based on current position
-     */
-    fun getNextWaypoint(currentPose: Pose): Waypoint? {
-        val currentX = currentPose.tx()
-        val currentZ = currentPose.tz()
-        
-        return waypoints
-            .filter { !it.isDestination }
-            .minByOrNull { waypoint ->
-                val dx = waypoint.x - currentX
-                val dz = waypoint.z - currentZ
-                sqrt(dx * dx + dz * dz)
-            }
-    }
 }
 
-/**
- * Direction instruction for navigation
- */
 enum class Direction {
     FORWARD,
     TURN_LEFT,

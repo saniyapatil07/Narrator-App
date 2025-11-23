@@ -1,144 +1,216 @@
 package com.example.narratorapp
 
 import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.media.AudioManager
 import android.os.Bundle
+import android.os.IBinder
+import android.util.Log
+import android.widget.Button
+import android.widget.ImageView
+import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.narratorapp.camera.CameraXManager
+import com.example.narratorapp.camera.CombinedAnalyzer
 import com.example.narratorapp.camera.OverlayView
-import com.example.narratorapp.narration.TTSManager
-import com.example.narratorapp.navigation.NavigationEngine
+import com.example.narratorapp.detection.DetectedObject
 import com.example.narratorapp.memory.MemoryManager
+import com.example.narratorapp.narration.TTSManager
+import com.example.narratorapp.navigation.ARCoreManager
+import com.example.narratorapp.navigation.NavigationEngine
 import com.example.narratorapp.voice.VoiceCommand
 import com.example.narratorapp.voice.VoiceCommandService
-import android.content.*
-import android.graphics.Bitmap
-import android.media.AudioManager
-import android.os.IBinder
-import android.util.Log
-import android.widget.Toast
-import androidx.lifecycle.lifecycleScope
-import com.example.narratorapp.detection.DetectedObject
-import com.example.narratorapp.navigation.ARCoreManager
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-
-
 class MainActivity : ComponentActivity() {
-    
+
     private lateinit var cameraXManager: CameraXManager
     private lateinit var ttsManager: TTSManager
     private lateinit var memoryManager: MemoryManager
-    private lateinit var navigationEngine: NavigationEngine
     private lateinit var arCoreManager: ARCoreManager
-    
-    private var voiceCommandService: VoiceCommandService? = null
-    private var serviceBound = false
+    private lateinit var navigationEngine: NavigationEngine
     
     private lateinit var previewView: PreviewView
     private lateinit var overlayView: OverlayView
+    private lateinit var voiceIndicator: ImageView
+    private lateinit var statusText: TextView
     
+    private var voiceCommandService: VoiceCommandService? = null
+    private var serviceBound = false
+    private var combinedAnalyzer: CombinedAnalyzer? = null
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as VoiceCommandService.LocalBinder
             voiceCommandService = binder.getService()
             serviceBound = true
             
-            // Set up command callback
             voiceCommandService?.setCommandCallback { command ->
                 handleVoiceCommand(command)
             }
             
             Log.d("MainActivity", "Voice command service connected")
         }
-        
+
         override fun onServiceDisconnected(name: ComponentName?) {
             voiceCommandService = null
             serviceBound = false
             Log.d("MainActivity", "Voice command service disconnected")
         }
     }
-    
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        
-        // Initialize UI
+
+        initializeViews()
+        initializeComponents()
+        setupButtonListeners()
+        requestPermissions()
+    }
+
+    private fun initializeViews() {
         previewView = findViewById(R.id.view_finder)
         overlayView = findViewById(R.id.overlayView)
-        
-        // Initialize components
+        voiceIndicator = findViewById(R.id.voiceIndicator)
+        statusText = findViewById(R.id.statusText)
+    }
+
+    private fun initializeComponents() {
         ttsManager = TTSManager(this)
         memoryManager = MemoryManager(this)
+        
         arCoreManager = ARCoreManager(this)
         lifecycle.addObserver(arCoreManager)
         
         if (arCoreManager.initialize()) {
             navigationEngine = NavigationEngine(this, ttsManager, arCoreManager)
+            statusText.text = "ARCore initialized"
+        } else {
+            statusText.text = "ARCore not available"
+            Toast.makeText(this, "Navigation features disabled", Toast.LENGTH_LONG).show()
         }
-        
-        // Request permissions
-        requestPermissions()
     }
-    
+
+    private fun setupButtonListeners() {
+        findViewById<Button>(R.id.btnNormalMode).setOnClickListener {
+            combinedAnalyzer?.mode = CombinedAnalyzer.Mode.OBJECT_AND_TEXT
+            statusText.text = "Normal Mode"
+            ttsManager.speak("Normal mode activated")
+        }
+
+        findViewById<Button>(R.id.btnReadingMode).setOnClickListener {
+            combinedAnalyzer?.mode = CombinedAnalyzer.Mode.READING_ONLY
+            statusText.text = "Reading Mode"
+            ttsManager.speak("Reading mode activated")
+        }
+
+        findViewById<Button>(R.id.btnRecognitionMode).setOnClickListener {
+            combinedAnalyzer?.mode = CombinedAnalyzer.Mode.RECOGNITION_MODE
+            statusText.text = "Recognition Mode"
+            ttsManager.speak("Recognition mode activated")
+        }
+
+        findViewById<Button>(R.id.btnVoiceCommand).setOnClickListener {
+            if (serviceBound && voiceCommandService?.isListening() == true) {
+                voiceCommandService?.stopListening()
+                statusText.text = "Voice paused"
+            } else {
+                startVoiceCommandService()
+                statusText.text = "Voice listening"
+            }
+        }
+
+        findViewById<Button>(R.id.btnNavigation).setOnClickListener {
+            showNavigationDialog()
+        }
+
+        findViewById<Button>(R.id.btnMemory).setOnClickListener {
+            showMemoryDialog()
+        }
+    }
+
     private fun requestPermissions() {
         val permissions = arrayOf(
             Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.ACCESS_FINE_LOCATION
         )
-        
+
         val permissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { permissions ->
             val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
             val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
-            
+
             if (cameraGranted) {
                 startCamera()
+            } else {
+                Toast.makeText(this, "Camera permission required", Toast.LENGTH_LONG).show()
             }
-            
+
             if (audioGranted) {
                 startVoiceCommandService()
             } else {
-                Toast.makeText(this, 
-                    "Microphone permission required for voice commands", 
-                    Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Microphone permission required for voice commands", Toast.LENGTH_LONG).show()
             }
         }
-        
+
         permissionLauncher.launch(permissions)
     }
-    
-    private fun startVoiceCommandService() {
-        // Start the service
-        VoiceCommandService.start(this)
+
+    private fun startCamera() {
+        cameraXManager = CameraXManager(
+            context = this,
+            ttsManager = ttsManager,
+            previewView = previewView,
+            overlayView = overlayView,
+            navigationEngine = if (::navigationEngine.isInitialized) navigationEngine else null,
+            memoryManager = memoryManager
+        )
         
-        // Bind to the service
+        cameraXManager.start()
+        combinedAnalyzer = cameraXManager.getAnalyzer()
+    }
+
+    private fun startVoiceCommandService() {
+        VoiceCommandService.start(this)
         val intent = Intent(this, VoiceCommandService::class.java)
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        voiceIndicator.visibility = ImageView.VISIBLE
     }
-    
+
     private fun handleVoiceCommand(command: VoiceCommand) {
         Log.d("MainActivity", "Handling command: ${command.getDescription()}")
-        
+        runOnUiThread {
+            statusText.text = command.getDescription()
+        }
+
         when (command) {
-            // Navigation
             is VoiceCommand.StartNavigation -> {
-                // TODO: Implement route selection
                 ttsManager.speak("Please select a destination first")
             }
-            
+
             is VoiceCommand.StopNavigation -> {
                 if (::navigationEngine.isInitialized) {
                     navigationEngine.stopNavigation()
                 }
             }
-            
+
             is VoiceCommand.RecordWaypoint -> {
                 if (::navigationEngine.isInitialized) {
                     val waypoint = navigationEngine.recordWaypoint("Voice Waypoint")
@@ -149,7 +221,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            
+
             is VoiceCommand.GetLocation -> {
                 val pose = arCoreManager.getCameraPose()
                 if (pose != null) {
@@ -158,152 +230,226 @@ class MainActivity : ComponentActivity() {
                     ttsManager.speak("Location not available")
                 }
             }
-            
-            // Reading Mode
+
             is VoiceCommand.EnableReadingMode -> {
-                // Switch analyzer mode to reading
+                combinedAnalyzer?.mode = CombinedAnalyzer.Mode.READING_ONLY
                 ttsManager.speak("Reading mode enabled")
-                // TODO: Set analyzer mode
             }
-            
+
             is VoiceCommand.DisableReadingMode -> {
+                combinedAnalyzer?.mode = CombinedAnalyzer.Mode.OBJECT_AND_TEXT
                 ttsManager.speak("Normal mode enabled")
-                // TODO: Set analyzer mode
             }
-            
-            // Memory Commands
+
             is VoiceCommand.LearnFace -> {
                 captureFaceForLearning(command.name)
             }
-            
+
             is VoiceCommand.LearnFacePrompt -> {
-                ttsManager.speak("Please say the person's name, then say learn face again")
+                showLearnFaceDialog()
             }
-            
+
             is VoiceCommand.LearnPlace -> {
                 capturePlaceForLearning(command.name)
             }
-            
+
             is VoiceCommand.LearnPlacePrompt -> {
-                ttsManager.speak("Please say the place name, then say learn place again")
+                showLearnPlaceDialog()
             }
-            
+
             is VoiceCommand.RecognizeFace -> {
+                combinedAnalyzer?.mode = CombinedAnalyzer.Mode.RECOGNITION_MODE
                 ttsManager.speak("Scanning for faces")
-                // Face recognition happens automatically in CombinedAnalyzer
             }
-            
+
             is VoiceCommand.RecognizePlace -> {
                 ttsManager.speak("Analyzing location")
-                // Place recognition happens automatically in CombinedAnalyzer
             }
-            
-            // Scene Description
+
             is VoiceCommand.DescribeScene -> {
                 describeCurrentScene()
             }
-            
+
             is VoiceCommand.FindObject -> {
                 ttsManager.speak("What object would you like me to find?")
-                // TODO: Implement specific object search
             }
-            
-            // Volume Control
+
             is VoiceCommand.IncreaseVolume -> {
                 adjustVolume(increase = true)
             }
-            
+
             is VoiceCommand.DecreaseVolume -> {
                 adjustVolume(increase = false)
             }
-            
-            // Playback Control
+
             is VoiceCommand.Pause -> {
                 voiceCommandService?.stopListening()
-                ttsManager.speak("Paused. Say resume to continue")
+                ttsManager.speak("Paused")
             }
-            
+
             is VoiceCommand.Resume -> {
-                voiceCommandService?.startListening()
+                startVoiceCommandService()
                 ttsManager.speak("Resumed")
             }
-            
-            // Help
+
             is VoiceCommand.Help -> {
                 announceAvailableCommands()
             }
         }
     }
-    
-    private fun captureFaceForLearning(name: String) {
-        lifecycleScope.launch {
-            try {
-                // Capture current camera frame
-                val bitmap = captureCurrentFrame()
-                
-                if (bitmap != null) {
-                    val success = memoryManager.learnFace(bitmap, name)
-                    if (success) {
-                        ttsManager.speak("I will remember $name")
-                    } else {
-                        ttsManager.speak("Failed to learn face. Please try again")
+
+    private fun showNavigationDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Navigation")
+            .setItems(arrayOf("Record Waypoint", "Start Navigation", "Stop Navigation")) { _, which ->
+                when (which) {
+                    0 -> {
+                        if (::navigationEngine.isInitialized) {
+                            val waypoint = navigationEngine.recordWaypoint("Manual Waypoint")
+                            if (waypoint != null) {
+                                Toast.makeText(this, "Waypoint recorded", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     }
-                } else {
-                    ttsManager.speak("Could not capture image")
+                    1 -> ttsManager.speak("Please create a route first")
+                    2 -> {
+                        if (::navigationEngine.isInitialized) {
+                            navigationEngine.stopNavigation()
+                        }
+                    }
                 }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Error learning face", e)
-                ttsManager.speak("Error occurred while learning face")
+            }
+            .show()
+    }
+
+    private fun showMemoryDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Memory")
+            .setItems(arrayOf("Learn Face", "Learn Place", "View Memories")) { _, which ->
+                when (which) {
+                    0 -> showLearnFaceDialog()
+                    1 -> showLearnPlaceDialog()
+                    2 -> showMemoriesDialog()
+                }
+            }
+            .show()
+    }
+
+    private fun showLearnFaceDialog() {
+        val input = TextInputEditText(this)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Learn New Face")
+            .setMessage("Enter person's name")
+            .setView(input)
+            .setPositiveButton("Capture") { _, _ ->
+                val name = input.text.toString()
+                if (name.isNotBlank()) {
+                    captureFaceForLearning(name)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showLearnPlaceDialog() {
+        val input = TextInputEditText(this)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Learn New Place")
+            .setMessage("Enter place name")
+            .setView(input)
+            .setPositiveButton("Capture") { _, _ ->
+                val name = input.text.toString()
+                if (name.isNotBlank()) {
+                    capturePlaceForLearning(name)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showMemoriesDialog() {
+        lifecycleScope.launch {
+            val faces = memoryManager.getAllFaces()
+            val places = memoryManager.getAllPlaces()
+            
+            val items = mutableListOf<String>()
+            items.add("--- Faces ---")
+            items.addAll(faces)
+            items.add("--- Places ---")
+            items.addAll(places)
+            
+            withContext(Dispatchers.Main) {
+                MaterialAlertDialogBuilder(this@MainActivity)
+                    .setTitle("Stored Memories")
+                    .setItems(items.toTypedArray(), null)
+                    .setPositiveButton("OK", null)
+                    .show()
             }
         }
     }
-    
+
+    private fun captureFaceForLearning(name: String) {
+        lifecycleScope.launch {
+            try {
+                val bitmap = captureCurrentFrame()
+                if (bitmap != null) {
+                    val success = memoryManager.learnFace(bitmap, name)
+                    withContext(Dispatchers.Main) {
+                        if (success) {
+                            ttsManager.speak("I will remember $name")
+                            Toast.makeText(this@MainActivity, "Learned face: $name", Toast.LENGTH_SHORT).show()
+                        } else {
+                            ttsManager.speak("Failed to learn face")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error learning face", e)
+            }
+        }
+    }
+
     private fun capturePlaceForLearning(name: String) {
         lifecycleScope.launch {
             try {
                 val bitmap = captureCurrentFrame()
-                
                 if (bitmap != null) {
                     val success = memoryManager.learnPlace(bitmap, name)
-                    if (success) {
-                        ttsManager.speak("Location saved as $name")
-                    } else {
-                        ttsManager.speak("Failed to learn location")
+                    withContext(Dispatchers.Main) {
+                        if (success) {
+                            ttsManager.speak("Location saved as $name")
+                            Toast.makeText(this@MainActivity, "Learned place: $name", Toast.LENGTH_SHORT).show()
+                        } else {
+                            ttsManager.speak("Failed to learn location")
+                        }
                     }
-                } else {
-                    ttsManager.speak("Could not capture image")
                 }
             } catch (e: Exception) {
                 Log.e("MainActivity", "Error learning place", e)
-                ttsManager.speak("Error occurred while learning place")
             }
         }
     }
-    
+
     private fun describeCurrentScene() {
-        lifecycleScope.launch {
-            // Get current detections from analyzer
-            val objects = getCurrentDetections() // You'll need to implement this
-            
-            if (objects.isEmpty()) {
-                ttsManager.speak("I don't see any objects in view")
-            } else {
-                val description = buildString {
-                    append("I see ")
-                    objects.take(5).forEachIndexed { index, obj ->
-                        if (index > 0 && index == objects.size - 1) {
-                            append(" and ")
-                        } else if (index > 0) {
-                            append(", ")
-                        }
-                        append("a ${obj.label}")
+        val objects = getCurrentDetections()
+        if (objects.isEmpty()) {
+            ttsManager.speak("I don't see any objects in view")
+        } else {
+            val description = buildString {
+                append("I see ")
+                objects.take(5).forEachIndexed { index, obj ->
+                    if (index > 0 && index == objects.size - 1) {
+                        append(" and ")
+                    } else if (index > 0) {
+                        append(", ")
                     }
+                    append("a ${obj.label}")
                 }
-                ttsManager.speak(description)
             }
+            ttsManager.speak(description)
         }
     }
-    
+
     private fun adjustVolume(increase: Boolean) {
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val direction = if (increase) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
@@ -313,7 +459,7 @@ class MainActivity : ComponentActivity() {
             AudioManager.FLAG_SHOW_UI
         )
     }
-    
+
     private fun announceAvailableCommands() {
         val commands = """
             Available commands:
@@ -323,16 +469,12 @@ class MainActivity : ComponentActivity() {
             Scene: what do you see, find object.
             Control: increase volume, decrease volume, pause, resume.
         """.trimIndent()
-        
         ttsManager.speak(commands)
     }
-    
-    // Helper function to capture current camera frame
+
     private suspend fun captureCurrentFrame(): Bitmap? {
         return withContext(Dispatchers.Main) {
             try {
-                // You'll need to implement frame capture from PreviewView
-                // This is a placeholder implementation
                 previewView.bitmap
             } catch (e: Exception) {
                 Log.e("MainActivity", "Error capturing frame", e)
@@ -340,24 +482,11 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    
+
     private fun getCurrentDetections(): List<DetectedObject> {
-        // Return current detections from overlay
-        return overlayView?.objects ?: emptyList()
+        return overlayView.objects
     }
-    
-    private fun startCamera() {
-        cameraXManager = CameraXManager(
-            context = this,
-            ttsManager = ttsManager,
-            previewView = previewView,
-            overlayView = overlayView,
-            navigationEngine = if (::navigationEngine.isInitialized) navigationEngine else null,
-            memoryManager = memoryManager
-        )
-        cameraXManager.start()
-    }
-    
+
     override fun onDestroy() {
         super.onDestroy()
         
@@ -367,12 +496,13 @@ class MainActivity : ComponentActivity() {
         }
         
         VoiceCommandService.stop(this)
-        
         ttsManager.shutdown()
         memoryManager.cleanup()
+        
         if (::navigationEngine.isInitialized) {
             navigationEngine.cleanup()
         }
+        
         arCoreManager.cleanup()
     }
 }

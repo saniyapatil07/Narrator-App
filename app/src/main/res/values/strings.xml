@@ -1,3 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">NarratorApp</string>
+    <string name="app_name">Narrator App</string>
+    <string name="camera_permission_required">Camera permission is required</string>
+    <string name="microphone_permission_required">Microphone permission is required for voice commands</string>
 </resources>

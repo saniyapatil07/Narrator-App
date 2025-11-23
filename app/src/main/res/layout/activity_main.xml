@@ -33,11 +33,10 @@
         android:id="@+id/voiceIndicator"
         android:layout_width="64dp"
         android:layout_height="64dp"
-        android:src="@drawable/ic_mic"
+        android:src="@android:drawable/ic_btn_speak_now"
         android:padding="16dp"
         android:background="@drawable/circle_background"
         android:visibility="gone"
-        app:tint="@android:color/white"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"
@@ -125,8 +124,6 @@
                 android:layout_weight="1"
                 android:text="Voice"
                 android:layout_marginEnd="8dp"
-                android:drawableTop="@drawable/ic_mic"
-                android:drawableTint="@android:color/white"
                 style="@style/Widget.MaterialComponents.Button" />
 
             <Button
@@ -136,8 +133,6 @@
                 android:layout_weight="1"
                 android:text="Navigate"
                 android:layout_marginEnd="8dp"
-                android:drawableTop="@drawable/ic_navigation"
-                android:drawableTint="@android:color/white"
                 style="@style/Widget.MaterialComponents.Button" />
 
             <Button
@@ -146,8 +141,6 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Memory"
-                android:drawableTop="@drawable/ic_memory"
-                android:drawableTint="@android:color/white"
                 style="@style/Widget.MaterialComponents.Button" />
         </LinearLayout>
     </LinearLayout>

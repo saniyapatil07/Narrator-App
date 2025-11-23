@@ -1,4 +1,4 @@
-package com.example.narrator.memory
+package com.example.narratorapp.memory
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -9,7 +9,7 @@ import org.tensorflow.lite.support.common.FileUtil
 class PlaceRecognizer(context: Context) {
 
     private var interpreter: Interpreter
-    private val inputSize = 224 // usually 224x224 for scene classification models
+    private val inputSize = 224
 
     init {
         val model = FileUtil.loadMappedFile(context, "place_embedding.tflite")
@@ -20,7 +20,7 @@ class PlaceRecognizer(context: Context) {
     fun getEmbedding(bitmap: Bitmap): FloatArray {
         val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
         val input = preprocess(resized)
-        val output = Array(1) { FloatArray(256) } // Example: 256-D place embeddings
+        val output = Array(1) { FloatArray(256) }
         interpreter.run(input, output)
         return output[0]
     }

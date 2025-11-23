@@ -30,19 +30,17 @@ class OverlayView(context: Context, attrs: AttributeSet) : View(context, attrs) 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        // Draw detected objects with labels
         objects.forEach { obj ->
             val rect = obj.toRect()
             canvas.drawRect(rect, boxPaint)
             canvas.drawText(
                 "${obj.label} ${obj.confidencePercent()}",
                 rect.left.toFloat(),
-                rect.top.toFloat() - 10, // show text just above box
+                rect.top.toFloat() - 10,
                 textPaint
             )
         }
 
-        // Draw recognized text regions
         texts.forEach { ocr ->
             canvas.drawRect(ocr.boundingBox, boxPaint)
             canvas.drawText(

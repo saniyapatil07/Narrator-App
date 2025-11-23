@@ -1,67 +1,47 @@
 package com.example.narratorapp.voice
 
-/**
- * Sealed class representing all possible voice commands
- */
 sealed class VoiceCommand {
-    
-    // Navigation Commands
     object StartNavigation : VoiceCommand()
     object StopNavigation : VoiceCommand()
     object RecordWaypoint : VoiceCommand()
     object GetLocation : VoiceCommand()
-    
-    // Reading Mode
     object EnableReadingMode : VoiceCommand()
     object DisableReadingMode : VoiceCommand()
-    
-    // Memory/Recognition Commands
     data class LearnFace(val name: String) : VoiceCommand()
-    object LearnFacePrompt : VoiceCommand() // When name not provided
+    object LearnFacePrompt : VoiceCommand()
     data class LearnPlace(val name: String) : VoiceCommand()
     object LearnPlacePrompt : VoiceCommand()
     object RecognizeFace : VoiceCommand()
     object RecognizePlace : VoiceCommand()
-    
-    // Scene Description
     object DescribeScene : VoiceCommand()
     object FindObject : VoiceCommand()
-    
-    // Volume Control
     object IncreaseVolume : VoiceCommand()
     object DecreaseVolume : VoiceCommand()
-    
-    // Playback Control
     object Pause : VoiceCommand()
     object Resume : VoiceCommand()
-    
-    // Help
     object Help : VoiceCommand()
     
-    /**
-     * Get user-friendly description of the command
-     */
     fun getDescription(): String {
         return when (this) {
-            is StartNavigation -> "Start navigation to destination"
-            is StopNavigation -> "Stop current navigation"
-            is RecordWaypoint -> "Record current location as waypoint"
-            is GetLocation -> "Announce current location"
-            is EnableReadingMode -> "Switch to reading mode for text"
-            is DisableReadingMode -> "Return to normal mode"
-            is LearnFace -> "Learn face with name: $name"
-            is LearnFacePrompt -> "Learn a new face"
-            is LearnPlace -> "Learn place with name: $name"
-            is LearnPlacePrompt -> "Learn a new place"
-            is RecognizeFace -> "Recognize person in view"
-            is RecognizePlace -> "Recognize current location"
-            is DescribeScene -> "Describe what's in view"
-            is FindObject -> "Search for specific object"
-            is IncreaseVolume -> "Increase narration volume"
-            is DecreaseVolume -> "Decrease narration volume"
-            is Pause -> "Pause narration"
-            is Resume -> "Resume narration"
-            is Help -> "Show available commands"
+            is StartNavigation -> "Start navigation"
+            is StopNavigation -> "Stop navigation"
+            is RecordWaypoint -> "Record waypoint"
+            is GetLocation -> "Get location"
+            is EnableReadingMode -> "Reading mode enabled"
+            is DisableReadingMode -> "Normal mode enabled"
+            is LearnFace -> "Learn face: $name"
+            is LearnFacePrompt -> "Learn face"
+            is LearnPlace -> "Learn place: $name"
+            is LearnPlacePrompt -> "Learn place"
+            is RecognizeFace -> "Recognize face"
+            is RecognizePlace -> "Recognize place"
+            is DescribeScene -> "Describe scene"
+            is FindObject -> "Find object"
+            is IncreaseVolume -> "Increase volume"
+            is DecreaseVolume -> "Decrease volume"
+            is Pause -> "Paused"
+            is Resume -> "Resumed"
+            is Help -> "Help"
         }
     }
 }

@@ -51,7 +51,6 @@ class ObjectDetector(context: Context) {
         val inputBuffer = bitmapToByteBuffer(resizedBitmap)
 
         val outputShape = interpreter!!.getOutputTensor(0).shape()
-        Log.d("ObjectDetector", "Model output shape: ${outputShape.joinToString()}")
         val outputBuffer = Array(outputShape[0]) {
             Array(outputShape[1]) { FloatArray(outputShape[2]) }
         }
@@ -59,7 +58,6 @@ class ObjectDetector(context: Context) {
         val startTime = SystemClock.uptimeMillis()
         interpreter!!.run(inputBuffer, outputBuffer)
         val inferenceTime = SystemClock.uptimeMillis() - startTime
-
         Log.i("ObjectDetector", "Inference time: $inferenceTime ms")
 
         val detections = decodeYOLO(outputBuffer[0], bitmap.width, bitmap.height)
@@ -74,9 +72,9 @@ class ObjectDetector(context: Context) {
         bitmap.getPixels(intValues, 0, inputSize, 0, 0, inputSize, inputSize)
 
         for (pixel in intValues) {
-            buffer.putFloat(((pixel shr 16 and 0xFF) / 255.0f)) // R
-            buffer.putFloat(((pixel shr 8 and 0xFF) / 255.0f))  // G
-            buffer.putFloat(((pixel and 0xFF) / 255.0f))        // B
+            buffer.putFloat(((pixel shr 16 and 0xFF) / 255.0f))
+            buffer.putFloat(((pixel shr 8 and 0xFF) / 255.0f))
+            buffer.putFloat(((pixel and 0xFF) / 255.0f))
         }
         buffer.rewind()
         return buffer
@@ -86,7 +84,6 @@ class ObjectDetector(context: Context) {
         val results = mutableListOf<DetectedObject>()
         for (prediction in output) {
             val confidence = prediction[4]
-            if (confidence > 0.1f) Log.d("ObjectDetector", "Found a potential object with confidence: $confidence")
             if (confidence < confidenceThreshold) continue
 
             var maxClassScore = 0f

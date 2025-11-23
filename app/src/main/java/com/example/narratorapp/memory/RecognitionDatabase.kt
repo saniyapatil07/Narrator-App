@@ -1,4 +1,4 @@
-package com.example.narrator.memory
+package com.example.narratorapp.memory
 
 import androidx.room.Database
 import androidx.room.Room

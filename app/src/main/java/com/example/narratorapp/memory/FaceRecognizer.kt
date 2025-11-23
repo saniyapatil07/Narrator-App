@@ -1,4 +1,4 @@
-package com.example.narrator.memory
+package com.example.narratorapp.memory
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -10,18 +10,23 @@ import kotlin.math.sqrt
 class FaceRecognizer(context: Context) {
 
     private var interpreter: Interpreter
-    private val inputSize = 112 // depends on your face embedding model
+
+    // WARNING: If you used the Google Colab script I gave you, these values MUST be 160 and 512.
+    // If you downloaded a different MobileFaceNet model, change them back to 112 and 128.
+    private val inputSize = 160
+    private val outputSize = 512
 
     init {
         val model = FileUtil.loadMappedFile(context, "face_embedding.tflite")
-        interpreter = Interpreter(model)
+        val options = Interpreter.Options()
+        interpreter = Interpreter(model, options)
         Log.d("FaceRecognizer", "Loaded face embedding model")
     }
 
     fun getEmbedding(bitmap: Bitmap): FloatArray {
         val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
         val input = preprocess(resized)
-        val output = Array(1) { FloatArray(128) } // typical embedding size
+        val output = Array(1) { FloatArray(outputSize) }
 
         interpreter.run(input, output)
         return l2Normalize(output[0])
@@ -32,6 +37,7 @@ class FaceRecognizer(context: Context) {
         for (y in 0 until inputSize) {
             for (x in 0 until inputSize) {
                 val pixel = bitmap.getPixel(x, y)
+                // Normalize to [-1, 1]
                 input[0][y][x][0] = ((pixel shr 16 and 0xFF) - 127.5f) / 128f
                 input[0][y][x][1] = ((pixel shr 8 and 0xFF) - 127.5f) / 128f
                 input[0][y][x][2] = ((pixel and 0xFF) - 127.5f) / 128f
@@ -41,14 +47,31 @@ class FaceRecognizer(context: Context) {
     }
 
     private fun l2Normalize(embedding: FloatArray): FloatArray {
-        val norm = sqrt(embedding.sumOf { it * it }.toDouble()).toFloat()
-        return embedding.map { it / norm }.toFloatArray()
+        var sumSq = 0.0
+        for (value in embedding) {
+            sumSq += value * value
+        }
+        val norm = sqrt(sumSq).toFloat()
+        
+        if (norm > 0) {
+            for (i in embedding.indices) {
+                embedding[i] = embedding[i] / norm
+            }
+        }
+        return embedding
     }
 
     fun cosineSimilarity(vec1: FloatArray, vec2: FloatArray): Float {
-        val dot = vec1.zip(vec2).sumOf { it.first * it.second }
-        val mag1 = sqrt(vec1.sumOf { it * it }.toDouble()).toFloat()
-        val mag2 = sqrt(vec2.sumOf { it * it }.toDouble()).toFloat()
-        return dot / (mag1 * mag2)
+        var dot = 0.0
+        var mag1 = 0.0
+        var mag2 = 0.0
+
+        for (i in vec1.indices) {
+            dot += vec1[i] * vec2[i]
+            mag1 += vec1[i] * vec1[i]
+            mag2 += vec2[i] * vec2[i]
+        }
+
+        return (dot / (sqrt(mag1) * sqrt(mag2))).toFloat()
     }
 }

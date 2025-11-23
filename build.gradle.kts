@@ -5,7 +5,8 @@
  * Learn more about Gradle by exploring our Samples at https://docs.gradle.org/9.0.0/samples
  */
 plugins {
-    id("com.android.application") version "8.9.1" apply false
+    id("com.android.application") version "8.2.0" apply false
     id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+    id("com.android.library") version "8.2.0" apply false
 }
 

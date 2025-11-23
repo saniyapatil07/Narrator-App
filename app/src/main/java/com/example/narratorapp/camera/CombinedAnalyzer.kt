@@ -1,14 +1,13 @@
 package com.example.narratorapp.camera
 
 import android.content.Context
+import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import android.util.Log
 import com.example.narratorapp.detection.DetectedObject
 import com.example.narratorapp.detection.ObjectDetector
 import com.example.narratorapp.memory.FaceDetector
 import com.example.narratorapp.memory.MemoryManager
-import com.example.narratorapp.memory.RecognitionType
 import com.example.narratorapp.narration.DecisionEngine
 import com.example.narratorapp.narration.TTSManager
 import com.example.narratorapp.navigation.NavigationEngine
@@ -16,7 +15,6 @@ import com.example.narratorapp.ocr.OCRLine
 import com.example.narratorapp.ocr.OCRProcessor
 import com.example.narratorapp.utils.ImageUtils
 import kotlinx.coroutines.*
-
 
 class CombinedAnalyzer(
     private val context: Context,
@@ -34,18 +32,18 @@ class CombinedAnalyzer(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private var lastTextDetectionTime = 0L
-    private val textCooldown = 2000L // 2 seconds
+    private val textCooldown = 2000L
     
     private var lastFaceRecognitionTime = 0L
-    private val faceRecognitionCooldown = 5000L // 5 seconds
+    private val faceRecognitionCooldown = 5000L
     
     private var lastPlaceRecognitionTime = 0L
-    private val placeRecognitionCooldown = 10000L // 10 seconds
+    private val placeRecognitionCooldown = 10000L
 
     enum class Mode {
-        OBJECT_AND_TEXT,    // Default: objects + text
-        READING_ONLY,       // OCR only
-        RECOGNITION_MODE    // Face/place recognition
+        OBJECT_AND_TEXT,
+        READING_ONLY,
+        RECOGNITION_MODE
     }
 
     var mode = Mode.OBJECT_AND_TEXT
@@ -56,43 +54,29 @@ class CombinedAnalyzer(
         val rotatedBitmap = ImageUtils.rotateBitmap(bitmap, rotationDegrees.toFloat())
 
         when (mode) {
-            Mode.OBJECT_AND_TEXT -> {
-                processObjectsAndText(rotatedBitmap, image)
-            }
-
-            Mode.READING_ONLY -> {
-                processTextOnly(rotatedBitmap, image)
-            }
-            
-            Mode.RECOGNITION_MODE -> {
-                processRecognition(rotatedBitmap, image)
-            }
+            Mode.OBJECT_AND_TEXT -> processObjectsAndText(rotatedBitmap, image)
+            Mode.READING_ONLY -> processTextOnly(rotatedBitmap, image)
+            Mode.RECOGNITION_MODE -> processRecognition(rotatedBitmap, image)
         }
     }
     
     private fun processObjectsAndText(bitmap: android.graphics.Bitmap, image: ImageProxy) {
         val detections = objectDetector.detect(bitmap)
-        Log.d("CombinedAnalyzer", "Objects detected: ${detections.size}")
-
-        // Pass detections to navigation engine for obstacle warnings
         navigationEngine?.processObstacles(detections)
 
         ocrProcessor.detect(bitmap) { texts ->
-            val textDetected = texts.isNotEmpty()
-            if (textDetected) {
-                val now = System.currentTimeMillis()
-                if (now - lastTextDetectionTime > textCooldown) {
-                    lastTextDetectionTime = now
-                    Log.d("CombinedAnalyzer", "⚡ Text detected! (${texts.size} lines)")
-                    decisionEngine.process(detections, texts)
-                }
+            val now = System.currentTimeMillis()
+            if (texts.isNotEmpty() && now - lastTextDetectionTime > textCooldown) {
+                lastTextDetectionTime = now
+                decisionEngine.process(detections, texts)
             } else {
                 decisionEngine.process(detections, emptyList())
             }
 
-            // Check for faces in detected "person" objects
             if (memoryManager != null) {
-                val personDetections = detections.filter { it.label == "person" && it.confidence > 0.6f }
+                val personDetections = detections.filter { 
+                    it.label == "person" && it.confidence > 0.6f 
+                }
                 if (personDetections.isNotEmpty()) {
                     tryRecognizeFaces(bitmap, personDetections)
                 }
@@ -110,9 +94,7 @@ class CombinedAnalyzer(
     private fun processTextOnly(bitmap: android.graphics.Bitmap, image: ImageProxy) {
         ocrProcessor.detect(bitmap) { texts ->
             if (texts.isNotEmpty()) {
-                Log.d("CombinedAnalyzer", "📖 Reading Mode: ${texts.size} lines detected")
                 decisionEngine.process(emptyList(), texts)
-
                 overlayView?.apply {
                     this.objects = emptyList()
                     this.texts = texts
@@ -131,7 +113,6 @@ class CombinedAnalyzer(
         
         val now = System.currentTimeMillis()
         
-        // Try face recognition
         if (now - lastFaceRecognitionTime > faceRecognitionCooldown) {
             scope.launch {
                 try {
@@ -153,7 +134,6 @@ class CombinedAnalyzer(
             }
         }
         
-        // Try place recognition periodically
         if (now - lastPlaceRecognitionTime > placeRecognitionCooldown) {
             scope.launch {
                 try {

@@ -8,11 +8,6 @@ import com.google.ar.core.Pose
 import kotlinx.coroutines.*
 import kotlin.math.*
 
-
-/**
- * Navigation engine for route planning and real-time guidance
- * Integrates ARCore tracking with object detection for safe navigation
- */
 class NavigationEngine(
     private val context: Context,
     private val ttsManager: TTSManager,
@@ -24,34 +19,25 @@ class NavigationEngine(
     private var currentWaypointIndex = 0
     private var isNavigating = false
     
-    // Obstacle detection
-    private var obstacleWarningDistance = 2.0f // meters
+    private var obstacleWarningDistance = 2.0f
     private var lastObstacleWarning = 0L
-    private val obstacleWarningCooldown = 3000L // 3 seconds
+    private val obstacleWarningCooldown = 3000L
     
-    // Navigation state
     private var lastAnnouncementTime = 0L
-    private val announcementInterval = 5000L // 5 seconds
-    
-    /**
-     * Start navigation to a destination using pre-recorded waypoints
-     */
+    private val announcementInterval = 5000L
+
     fun startNavigation(route: NavigationRoute) {
         currentRoute = route
         currentWaypointIndex = 0
         isNavigating = true
         
-        ttsManager.speak("Navigation started to ${route.endLocation}. Total distance ${route.totalDistance().toInt()} meters")
+        ttsManager.speak("Navigation started to ${route.endLocation}")
         
-        // Start monitoring loop
         scope.launch {
             monitorNavigation()
         }
     }
     
-    /**
-     * Main navigation monitoring loop
-     */
     private suspend fun monitorNavigation() {
         while (isNavigating) {
             val currentPose = arCoreManager.getCameraPose()
@@ -61,12 +47,10 @@ class NavigationEngine(
                 val distance = calculateDistance(currentPose, currentWaypoint.toPose())
                 val direction = calculateDirection(currentPose, currentWaypoint.toPose())
                 
-                // Check if reached waypoint
                 if (distance < 1.5f) {
                     onWaypointReached()
                 }
                 
-                // Periodic announcements
                 val now = System.currentTimeMillis()
                 if (now - lastAnnouncementTime > announcementInterval) {
                     announceProgress(direction, distance)
@@ -74,13 +58,10 @@ class NavigationEngine(
                 }
             }
             
-            delay(500) // Update twice per second
+            delay(500)
         }
     }
     
-    /**
-     * Process detected objects for obstacle warnings
-     */
     fun processObstacles(objects: List<DetectedObject>) {
         if (!isNavigating) return
         
@@ -101,48 +82,38 @@ class NavigationEngine(
     private fun isDangerousObstacle(label: String): Boolean {
         val obstacles = listOf(
             "person", "bicycle", "car", "motorcycle", "truck", "bus",
-            "stop sign", "traffic light", "fire hydrant", "bench",
-            "chair", "potted plant"
+            "stop sign", "traffic light", "fire hydrant", "bench", "chair"
         )
         return obstacles.contains(label.lowercase())
     }
     
     private fun announceObstacle(obj: DetectedObject) {
-        // Estimate distance based on bounding box size (rough approximation)
         val boxArea = (obj.boundingBox.width() * obj.boundingBox.height())
         val estimatedDistance = when {
             boxArea > 100000 -> "very close"
             boxArea > 50000 -> "nearby"
             else -> "ahead"
         }
-        
         ttsManager.speak("Warning: ${obj.label} detected $estimatedDistance")
     }
     
-    /**
-     * Calculate direction instruction
-     */
     private fun calculateDirection(currentPose: Pose, targetPose: Pose): Direction {
-        // Get forward direction from current pose
         val forward = floatArrayOf(0f, 0f, -1f)
         val rotatedForward = FloatArray(3)
         currentPose.rotateVector(forward, 0, rotatedForward, 0)
         
-        // Vector to target
         val toTarget = floatArrayOf(
             targetPose.tx() - currentPose.tx(),
             0f,
             targetPose.tz() - currentPose.tz()
         )
         
-        // Normalize
         val toTargetMag = sqrt(toTarget[0] * toTarget[0] + toTarget[2] * toTarget[2])
         if (toTargetMag < 0.01f) return Direction.ARRIVED
         
         toTarget[0] /= toTargetMag
         toTarget[2] /= toTargetMag
         
-        // Calculate angle using cross product and dot product
         val dot = rotatedForward[0] * toTarget[0] + rotatedForward[2] * toTarget[2]
         val cross = rotatedForward[0] * toTarget[2] - rotatedForward[2] * toTarget[0]
         
@@ -169,21 +140,18 @@ class NavigationEngine(
     
     private fun announceProgress(direction: Direction, distance: Float) {
         val instruction = when {
-            distance < 2f -> "Almost there. ${direction.toSpeechInstruction()}"
-            distance < 10f -> "${direction.toSpeechInstruction(distance)}. Distance ${distance.toInt()} meters"
-            else -> "Continue ${direction.name.lowercase()}. ${distance.toInt()} meters to next waypoint"
+            distance < 2f -> "Almost there"
+            distance < 10f -> "${direction.toSpeechInstruction(distance)}"
+            else -> "Continue ${direction.name.lowercase()}"
         }
         ttsManager.speak(instruction)
     }
     
     private fun onWaypointReached() {
         val waypoint = getCurrentWaypoint() ?: return
-        
         ttsManager.speak(waypoint.label)
-        
         currentWaypointIndex++
         
-        // Check if finished
         if (currentWaypointIndex >= (currentRoute?.waypoints?.size ?: 0)) {
             stopNavigation()
             ttsManager.speak("You have arrived at your destination")
@@ -194,45 +162,16 @@ class NavigationEngine(
         return currentRoute?.waypoints?.getOrNull(currentWaypointIndex)
     }
     
-    /**
-     * Record a new waypoint at current position
-     */
     fun recordWaypoint(label: String, description: String = ""): Waypoint? {
         val pose = arCoreManager.getCameraPose() ?: return null
         return Waypoint.fromPose(pose, label, description)
     }
     
-    /**
-     * Stop current navigation
-     */
     fun stopNavigation() {
         isNavigating = false
         currentRoute = null
         currentWaypointIndex = 0
         ttsManager.speak("Navigation stopped")
-    }
-    
-    /**
-     * Calculate ETA based on average walking speed (1.4 m/s)
-     */
-    fun getEstimatedTimeToArrival(): Int {
-        val route = currentRoute ?: return 0
-        val remainingWaypoints = route.waypoints.drop(currentWaypointIndex)
-        
-        var totalDistance = 0f
-        remainingWaypoints.zipWithNext().forEach { (a, b) ->
-            totalDistance += a.distanceTo(b)
-        }
-        
-        // Add distance to current waypoint
-        arCoreManager.getCameraPose()?.let { pose ->
-            remainingWaypoints.firstOrNull()?.let { waypoint ->
-                totalDistance += calculateDistance(pose, waypoint.toPose())
-            }
-        }
-        
-        // Average walking speed: 1.4 m/s
-        return (totalDistance / 1.4f).toInt()
     }
     
     fun isNavigating() = isNavigating

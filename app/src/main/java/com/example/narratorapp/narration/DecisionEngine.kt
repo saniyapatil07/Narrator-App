@@ -2,19 +2,15 @@ package com.example.narratorapp.narration
 
 import com.example.narratorapp.detection.DetectedObject
 import com.example.narratorapp.ocr.OCRLine
-import com.example.narratorapp.narration.TTSManager
-import com.example.narratorapp.navigation.NavigationEngine
 
-class DecisionEngine(
-    private val ttsManager: TTSManager,
-    private val navigationEngine: NavigationEngine? = null
-) {
+class DecisionEngine(private val ttsManager: TTSManager) {
 
     private var lastNarrationTime = 0L
+    private val narrationCooldown = 3000L
 
     fun process(objects: List<DetectedObject>, texts: List<OCRLine>) {
         val now = System.currentTimeMillis()
-        if (now - lastNarrationTime < 3000) return // throttle
+        if (now - lastNarrationTime < narrationCooldown) return
 
         when {
             texts.isNotEmpty() -> {
