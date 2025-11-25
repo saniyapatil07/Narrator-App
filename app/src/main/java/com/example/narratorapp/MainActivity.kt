@@ -106,43 +106,43 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun setupButtonListeners() {
-        findViewById<Button>(R.id.btnNormalMode).setOnClickListener {
-            combinedAnalyzer?.mode = CombinedAnalyzer.Mode.OBJECT_AND_TEXT
-            statusText.text = "Normal Mode"
-            ttsManager.speak("Normal mode activated")
-        }
+private fun setupButtonListeners() {
+    findViewById<Button>(R.id.btnNormalMode)?.setOnClickListener {
+        combinedAnalyzer?.mode = CombinedAnalyzer.Mode.OBJECT_AND_TEXT
+        statusText.text = "Normal Mode"
+        ttsManager.speak("Normal mode activated")
+    }
 
-        findViewById<Button>(R.id.btnReadingMode).setOnClickListener {
-            combinedAnalyzer?.mode = CombinedAnalyzer.Mode.READING_ONLY
-            statusText.text = "Reading Mode"
-            ttsManager.speak("Reading mode activated")
-        }
+    findViewById<Button>(R.id.btnReadingMode)?.setOnClickListener {
+        combinedAnalyzer?.mode = CombinedAnalyzer.Mode.READING_ONLY
+        statusText.text = "Reading Mode"
+        ttsManager.speak("Reading mode activated")
+    }
 
-        findViewById<Button>(R.id.btnRecognitionMode).setOnClickListener {
-            combinedAnalyzer?.mode = CombinedAnalyzer.Mode.RECOGNITION_MODE
-            statusText.text = "Recognition Mode"
-            ttsManager.speak("Recognition mode activated")
-        }
+    findViewById<Button>(R.id.btnRecognitionMode)?.setOnClickListener {
+        combinedAnalyzer?.mode = CombinedAnalyzer.Mode.RECOGNITION_MODE
+        statusText.text = "Recognition Mode"
+        ttsManager.speak("Recognition mode activated")
+    }
 
-        findViewById<Button>(R.id.btnVoiceCommand).setOnClickListener {
-            if (serviceBound && voiceCommandService?.isListening() == true) {
-                voiceCommandService?.stopListening()
-                statusText.text = "Voice paused"
-            } else {
-                startVoiceCommandService()
-                statusText.text = "Voice listening"
-            }
-        }
-
-        findViewById<Button>(R.id.btnNavigation).setOnClickListener {
-            showNavigationDialog()
-        }
-
-        findViewById<Button>(R.id.btnMemory).setOnClickListener {
-            showMemoryDialog()
+    findViewById<Button>(R.id.btnVoiceCommand)?.setOnClickListener {
+        if (serviceBound && voiceCommandService?.isListening() == true) {
+            voiceCommandService?.stopListening()
+            statusText.text = "Voice paused"
+        } else {
+            startVoiceCommandService()
+            statusText.text = "Voice listening"
         }
     }
+
+    findViewById<Button>(R.id.btnNavigation)?.setOnClickListener {
+        showNavigationDialog()
+    }
+
+    findViewById<Button>(R.id.btnMemory)?.setOnClickListener {
+        showMemoryDialog()
+    }
+}
 
     private fun requestPermissions() {
         val permissions = arrayOf(

@@ -69,7 +69,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
-        <!-- Mode Selection -->
+        <!-- Mode Selection Label -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -78,11 +78,11 @@
             android:textSize="14sp"
             android:layout_marginBottom="8dp" />
 
-        <com.google.android.material.button.MaterialButtonToggleGroup
-            android:id="@+id/modeToggleGroup"
+        <!-- Mode Buttons (Changed from MaterialButtonToggleGroup) -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:singleSelection="true"
+            android:orientation="horizontal"
             android:layout_marginBottom="16dp">
 
             <Button
@@ -91,6 +91,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Normal"
+                android:layout_marginEnd="4dp"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
 
             <Button
@@ -99,6 +100,8 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Reading"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
 
             <Button
@@ -107,8 +110,9 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Recognition"
+                android:layout_marginStart="4dp"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
-        </com.google.android.material.button.MaterialButtonToggleGroup>
+        </LinearLayout>
 
         <!-- Quick Actions -->
         <LinearLayout

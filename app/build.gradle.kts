@@ -69,9 +69,13 @@ dependencies {
     implementation("com.google.mlkit:face-detection:16.1.6")
     
     // TensorFlow Lite
-    implementation("org.tensorflow:tensorflow-lite:2.14.0")
-    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.17.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4") {
+        // Exclude the older internal TFLite version to prevent conflicts
+        exclude(group = "org.tensorflow", module = "tensorflow-lite")
+        exclude(group = "org.tensorflow", module = "tensorflow-lite-api")
+    }
     
     // ARCore
     implementation("com.google.ar:core:1.41.0")
@@ -89,4 +93,13 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+
+
+    configurations.all {
+    resolutionStrategy {
+        // FORCE Gradle to use 2.16.1, even if other libraries want older versions
+        force("org.tensorflow:tensorflow-lite:2.17.0")
+        force("org.tensorflow:tensorflow-lite-api:2.17.0") 
+    }
+}
 }
