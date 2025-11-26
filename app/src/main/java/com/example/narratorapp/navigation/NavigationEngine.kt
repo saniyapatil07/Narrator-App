@@ -88,14 +88,25 @@ class NavigationEngine(
     }
     
     private fun announceObstacle(obj: DetectedObject) {
+    // 1. Find the center of the object on screen
+    val centerX = obj.boundingBox.centerX()
+    val centerY = obj.boundingBox.centerY()
+
+    // 2. Ask ARCore for the real distance
+    val distanceMeters = arCoreManager.getDistanceFromScreenPoint(centerX, centerY)
+
+    // 3. Speak the result
+    if (distanceMeters != null) {
+        // Example output: "Warning: Chair detected 1.2 meters away"
+        val formattedDistance = String.format("%.1f", distanceMeters)
+        ttsManager.speak("Warning: ${obj.label} detected $formattedDistance meters away")
+    } else {
+        // Fallback to your old size-based guess if ARCore isn't ready
         val boxArea = (obj.boundingBox.width() * obj.boundingBox.height())
-        val estimatedDistance = when {
-            boxArea > 100000 -> "very close"
-            boxArea > 50000 -> "nearby"
-            else -> "ahead"
-        }
-        ttsManager.speak("Warning: ${obj.label} detected $estimatedDistance")
+        val estimated = if (boxArea > 50000) "nearby" else "ahead"
+        ttsManager.speak("Warning: ${obj.label} detected $estimated")
     }
+}
     
     private fun calculateDirection(currentPose: Pose, targetPose: Pose): Direction {
         val forward = floatArrayOf(0f, 0f, -1f)

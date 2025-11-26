@@ -16,7 +16,7 @@ class ObjectDetector(context: Context) {
 
     private val confidenceThreshold = 0.4f
     private val iouThreshold = 0.5f
-    private val inputSize = 640
+    private val inputSize = 320
     private val numThreads = 4
     private var interpreter: Interpreter? = null
 
@@ -51,6 +51,7 @@ class ObjectDetector(context: Context) {
         val inputBuffer = bitmapToByteBuffer(resizedBitmap)
 
         val outputShape = interpreter!!.getOutputTensor(0).shape()
+        Log.e("ObjectDetector", "MODEL SHAPE: [${outputShape.joinToString(",")}]")
         val outputBuffer = Array(outputShape[0]) {
             Array(outputShape[1]) { FloatArray(outputShape[2]) }
         }
@@ -72,47 +73,80 @@ class ObjectDetector(context: Context) {
         bitmap.getPixels(intValues, 0, inputSize, 0, 0, inputSize, inputSize)
 
         for (pixel in intValues) {
-            buffer.putFloat(((pixel shr 16 and 0xFF) / 255.0f))
-            buffer.putFloat(((pixel shr 8 and 0xFF) / 255.0f))
-            buffer.putFloat(((pixel and 0xFF) / 255.0f))
+            val r = (pixel shr 16 and 0xFF)
+            val g = (pixel shr 8 and 0xFF)
+            val b = (pixel and 0xFF)
+
+            // CHANGED: Use (Value - Mean) / StdDev for [-1.0 to 1.0] range
+            buffer.putFloat((r - 127.5f) / 127.5f)
+            buffer.putFloat((g - 127.5f) / 127.5f)
+            buffer.putFloat((b - 127.5f) / 127.5f)
         }
         buffer.rewind()
         return buffer
     }
 
-    private fun decodeYOLO(output: Array<FloatArray>, originalWidth: Int, originalHeight: Int): MutableList<DetectedObject> {
+    private fun decodeYOLO(output: Array<FloatArray>, originalWidth: Int, originalHeight: Int): List<DetectedObject> {
         val results = mutableListOf<DetectedObject>()
-        for (prediction in output) {
-            val confidence = prediction[4]
-            if (confidence < confidenceThreshold) continue
+        val rows = output.size
+        val cols = output[0].size
+        
+        // Check if model is transposed
+        val isTransposed = (rows == 85 && cols > 85) 
+        val numAnchors = if (isTransposed) cols else rows
+        val numClassParams = if (isTransposed) rows else cols
+        
+        // LOG ONCE: Print the raw numbers of the first box to see what the model is thinking
+        val firstConf = if (isTransposed) output[4][0] else output[0][4]
+        val firstX = if (isTransposed) output[0][0] else output[0][0]
+        Log.v("ObjectDetector", "DEBUG: First Anchor -> X:$firstX, Conf:$firstConf")
 
-            var maxClassScore = 0f
-            var classId = -1
-            for (i in 5 until prediction.size) {
-                if (prediction[i] > maxClassScore) {
-                    maxClassScore = prediction[i]
-                    classId = i - 5
+        for (i in 0 until numAnchors) {
+            val confidence = if (isTransposed) output[4][i] else output[i][4]
+            
+            // LOW THRESHOLD DEBUGGING
+            // If you see negative numbers in logs, the model outputs 'Logits' and needs a sigmoid function.
+            if (confidence > 0.1f) { 
+                var maxClassScore = 0f
+                var classId = -1
+                
+                for (c in 5 until numClassParams) {
+                    val score = if (isTransposed) output[c][i] else output[i][c]
+                    if (score > maxClassScore) {
+                        maxClassScore = score
+                        classId = c - 5
+                    }
+                }
+
+                if (maxClassScore > confidenceThreshold) {
+                    val xRaw = if (isTransposed) output[0][i] else output[i][0]
+                    val yRaw = if (isTransposed) output[1][i] else output[i][1]
+                    val wRaw = if (isTransposed) output[2][i] else output[i][2]
+                    val hRaw = if (isTransposed) output[3][i] else output[i][3]
+
+                    val xCenter = xRaw * originalWidth
+                    val yCenter = yRaw * originalHeight
+                    val width = wRaw * originalWidth
+                    val height = hRaw * originalHeight
+                    val x = xCenter - (width / 2)
+                    val y = yCenter - (height / 2)
+
+                    results.add(
+                        DetectedObject(
+                            label = labels.getOrElse(classId) { "Unknown" },
+                            confidence = confidence,
+                            boundingBox = RectF(x, y, x + width, y + height)
+                        )
+                    )
                 }
             }
-
-            if (maxClassScore > confidenceThreshold) {
-                val xCenter = prediction[0] * originalWidth
-                val yCenter = prediction[1] * originalHeight
-                val width = prediction[2] * originalWidth
-                val height = prediction[3] * originalHeight
-                val x = xCenter - (width / 2)
-                val y = yCenter - (height / 2)
-
-                results.add(
-                    DetectedObject(
-                        label = labels.getOrElse(classId) { "Unknown" },
-                        confidence = confidence,
-                        boundingBox = RectF(x, y, x + width, y + height)
-                    )
-                )
-            }
         }
-        return results
+        
+        if (results.isNotEmpty()) {
+             Log.i("ObjectDetector", "Found ${results.size} objects!")
+        }
+        
+        return nonMaxSuppression(results)
     }
 
     private fun nonMaxSuppression(detections: List<DetectedObject>): List<DetectedObject> {

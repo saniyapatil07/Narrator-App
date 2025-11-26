@@ -57,7 +57,17 @@ class VoiceCommandService : Service() {
         }
         
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification(false))
+        try {
+            // Wrap this in try-catch to stop the crash on Android 12+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, createNotification(false), 
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            } else {
+                startForeground(NOTIFICATION_ID, createNotification(false))
+            }
+        } catch (e: Exception) {
+            Log.e("VoiceCommandService", "Failed to start foreground service", e)
+        }
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -73,8 +83,8 @@ class VoiceCommandService : Service() {
         return binder
     }
     
-    fun startListening() {
-        voiceCommandManager.startListening()
+    fun startListening(startWithHotword: Boolean = true) {
+        voiceCommandManager.startListening(startWithHotword)
         updateNotification(true)
     }
     

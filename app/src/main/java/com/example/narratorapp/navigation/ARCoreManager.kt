@@ -83,6 +83,18 @@ class ARCoreManager(private val context: Context) : DefaultLifecycleObserver {
         return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
     }
     
+    //distance to specific 2d point on screen
+    fun getDistanceFromScreenPoint(x: Float, y: Float): Float? {
+        val frame = arSession?.update()?: return null
+
+        val hitResults = frame.hitTest(x, y)
+
+        val closestHit = hitResults.firstOrNull { 
+        it.trackable is Plane || it.trackable is Point 
+    }
+    
+    return closestHit?.distance
+    }
     fun createAnchor(pose: Pose): Anchor? {
         return try {
             arSession?.createAnchor(pose)

@@ -20,12 +20,12 @@ android {
     
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            isMinifyEnabled = false
+            isShrinkResources = false
+            // proguardFiles(
+            //     getDefaultProguardFile("proguard-android-optimize.txt"),
+            //     "proguard-rules.pro"
+            // )
         }
         debug {
             isMinifyEnabled = false
@@ -71,11 +71,7 @@ dependencies {
     // TensorFlow Lite
     implementation("org.tensorflow:tensorflow-lite:2.17.0")
     implementation("org.tensorflow:tensorflow-lite-gpu:2.17.0")
-    implementation("org.tensorflow:tensorflow-lite-support:0.4.4") {
-        // Exclude the older internal TFLite version to prevent conflicts
-        exclude(group = "org.tensorflow", module = "tensorflow-lite")
-        exclude(group = "org.tensorflow", module = "tensorflow-lite-api")
-    }
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4") 
     
     // ARCore
     implementation("com.google.ar:core:1.41.0")

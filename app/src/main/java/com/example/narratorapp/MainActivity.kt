@@ -130,8 +130,8 @@ private fun setupButtonListeners() {
             voiceCommandService?.stopListening()
             statusText.text = "Voice paused"
         } else {
-            startVoiceCommandService()
-            statusText.text = "Voice listening"
+            voiceCommandService?.startListening(startWithHotword = false)
+            statusText.text = "Listening...."
         }
     }
 
