@@ -147,6 +147,24 @@
                 android:text="Memory"
                 style="@style/Widget.MaterialComponents.Button" />
         </LinearLayout>
+
+
+        <!-- Add to activity_main.xml inside controlPanel for testing purpose only-->
+<Button
+    android:id="@+id/btnTestTTS"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:text="Test TTS"
+    android:layout_marginTop="8dp"
+    style="@style/Widget.MaterialComponents.Button" />
+
+<Button
+    android:id="@+id/btnAnnounceDetections"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:text="Announce Current Detections"
+    android:layout_marginTop="8dp"
+    style="@style/Widget.MaterialComponents.Button" />
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

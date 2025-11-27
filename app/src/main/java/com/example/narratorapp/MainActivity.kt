@@ -142,6 +142,31 @@ private fun setupButtonListeners() {
     findViewById<Button>(R.id.btnMemory)?.setOnClickListener {
         showMemoryDialog()
     }
+
+    // Add this to MainActivity.kt in setupButtonListeners()
+
+findViewById<Button>(R.id.btnTestTTS)?.setOnClickListener {
+    Log.i("MainActivity", "Test TTS button clicked")
+    statusText.text = "Testing TTS..."
+    ttsManager.speak("Test. This is a test announcement. If you hear this, TTS is working.")
+}
+
+// Add this to test detection announcements
+findViewById<Button>(R.id.btnAnnounceDetections)?.setOnClickListener {
+    val currentObjects = overlayView.objects
+    Log.i("MainActivity", "Announce detections clicked. Found ${currentObjects.size} objects")
+    
+    if (currentObjects.isEmpty()) {
+        ttsManager.speak("No objects currently detected")
+        statusText.text = "No objects detected"
+    } else {
+        val objects = currentObjects.take(3).joinToString(", ") { it.label }
+        val announcement = "I see: $objects"
+        ttsManager.speak(announcement)
+        statusText.text = announcement
+        Log.i("MainActivity", "Announcing: $announcement")
+    }
+}
 }
 
     private fun requestPermissions() {
