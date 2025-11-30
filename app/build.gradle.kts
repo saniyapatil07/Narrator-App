@@ -72,6 +72,8 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite:2.17.0")
     implementation("org.tensorflow:tensorflow-lite-gpu:2.17.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4") 
+    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.17.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu-delegate-plugin:0.4.4")
     
     // ARCore
     implementation("com.google.ar:core:1.41.0")

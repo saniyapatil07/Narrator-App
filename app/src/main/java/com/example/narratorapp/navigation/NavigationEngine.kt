@@ -8,10 +8,14 @@ import com.google.ar.core.Pose
 import kotlinx.coroutines.*
 import kotlin.math.*
 
+/**
+ * DROP-IN REPLACEMENT for existing NavigationEngine
+ * Same API, optimized to use selective depth from ARCoreManager
+ */
 class NavigationEngine(
     private val context: Context,
     private val ttsManager: TTSManager,
-    private val arCoreManager: ARCoreManager
+    val arCoreManager: ARCoreManager
 ) {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     
@@ -62,20 +66,36 @@ class NavigationEngine(
         }
     }
     
+    // EXISTING FUNCTION - now optimized with selective depth
     fun processObstacles(objects: List<DetectedObject>) {
         if (!isNavigating) return
+        
+        val now = System.currentTimeMillis()
+        if (now - lastObstacleWarning < obstacleWarningCooldown) return
         
         val dangerousObjects = objects.filter { obj ->
             isDangerousObstacle(obj.label) && obj.confidence > 0.5f
         }
         
-        if (dangerousObjects.isNotEmpty()) {
-            val now = System.currentTimeMillis()
-            if (now - lastObstacleWarning > obstacleWarningCooldown) {
-                val obstacle = dangerousObjects.first()
-                announceObstacle(obstacle)
-                lastObstacleWarning = now
+        if (dangerousObjects.isEmpty()) return
+        
+        // OPTIMIZED: Use selective depth calculation
+        var closestObstacle: DetectedObject? = null
+        var closestDepth = Float.MAX_VALUE
+        
+        for (obstacle in dangerousObjects) {
+            // Use optimized ARCoreManager depth function
+            val depth = arCoreManager.getDepthForBoundingBox(obstacle.boundingBox)
+            
+            if (depth != null && depth < closestDepth && depth < obstacleWarningDistance) {
+                closestObstacle = obstacle
+                closestDepth = depth
             }
+        }
+        
+        if (closestObstacle != null) {
+            announceObstacle(closestObstacle, closestDepth)
+            lastObstacleWarning = now
         }
     }
     
@@ -87,26 +107,18 @@ class NavigationEngine(
         return obstacles.contains(label.lowercase())
     }
     
-    private fun announceObstacle(obj: DetectedObject) {
-    // 1. Find the center of the object on screen
-    val centerX = obj.boundingBox.centerX()
-    val centerY = obj.boundingBox.centerY()
-
-    // 2. Ask ARCore for the real distance
-    val distanceMeters = arCoreManager.getDistanceFromScreenPoint(centerX, centerY)
-
-    // 3. Speak the result
-    if (distanceMeters != null) {
-        // Example output: "Warning: Chair detected 1.2 meters away"
-        val formattedDistance = String.format("%.1f", distanceMeters)
-        ttsManager.speak("Warning: ${obj.label} detected $formattedDistance meters away")
-    } else {
-        // Fallback to your old size-based guess if ARCore isn't ready
-        val boxArea = (obj.boundingBox.width() * obj.boundingBox.height())
-        val estimated = if (boxArea > 50000) "nearby" else "ahead"
-        ttsManager.speak("Warning: ${obj.label} detected $estimated")
+    // OPTIMIZED: Now uses real metric depth
+    private fun announceObstacle(obj: DetectedObject, depthMeters: Float) {
+        val formattedDistance = String.format("%.1f", depthMeters)
+        val urgency = when {
+            depthMeters < 0.5f -> "Caution! "
+            depthMeters < 1.0f -> "Warning: "
+            else -> ""
+        }
+        
+        ttsManager.speak("${urgency}${obj.label} detected $formattedDistance meters away")
+        Log.i("NavigationEngine", "Obstacle: ${obj.label} at ${formattedDistance}m")
     }
-}
     
     private fun calculateDirection(currentPose: Pose, targetPose: Pose): Direction {
         val forward = floatArrayOf(0f, 0f, -1f)

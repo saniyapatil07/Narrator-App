@@ -1,6 +1,7 @@
 package com.example.narratorapp.camera
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -16,7 +17,12 @@ import com.example.narratorapp.ocr.OCRProcessor
 import com.example.narratorapp.utils.ImageUtils
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.LinkedBlockingQueue
 
+/**
+ * DROP-IN REPLACEMENT for existing CombinedAnalyzer
+ * Same API, optimized with double-buffering and parallel processing
+ */
 class CombinedAnalyzer(
     private val context: Context,
     private val ttsManager: TTSManager,
@@ -30,16 +36,25 @@ class CombinedAnalyzer(
     private val faceDetector = FaceDetector()
     private val decisionEngine = DecisionEngine(ttsManager)
     
-    // Use a SINGLE background thread for all ML work
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private val mlDispatcher = Dispatchers.Default.limitedParallelism(1)
-    private val scope = CoroutineScope(mlDispatcher + SupervisorJob())
+    // OPTIMIZED: Separate dispatchers for parallel execution
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val detectionDispatcher = Dispatchers.Default.limitedParallelism(1)
     
-    // REDUCED throttling for testing
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val ocrDispatcher = Dispatchers.Default.limitedParallelism(1)
+    
+    private val scope = CoroutineScope(SupervisorJob())
+    
+    // OPTIMIZED: Double buffer queue
+    private val bitmapQueue = LinkedBlockingQueue<BitmapTask>(2)
+    
+    // OPTIMIZED: Processing flags
+    private val isDetecting = AtomicBoolean(false)
+    private val isOCRing = AtomicBoolean(false)
+    
+    // Same throttling as before
     private var lastAnalysisTime = 0L
-    private val analysisInterval = 200L  // Process every 200ms (5 FPS) - was 300ms
-    
-    private val isProcessing = AtomicBoolean(false)
+    private val analysisInterval = 200L
     
     private var lastTextDetectionTime = 0L
     private val textCooldown = 2000L
@@ -65,7 +80,7 @@ class CombinedAnalyzer(
         val now = System.currentTimeMillis()
         frameCount++
         
-        // Log every 30 frames
+        // Stats logging (same as before)
         if (frameCount % 30 == 0) {
             Log.i("CombinedAnalyzer", "=== FRAME STATS ===")
             Log.i("CombinedAnalyzer", "Total frames: $frameCount, Processed: $processedFrameCount")
@@ -78,136 +93,153 @@ class CombinedAnalyzer(
             return
         }
         
-        // Drop frames if still processing
-        if (!isProcessing.compareAndSet(false, true)) {
-            Log.d("CombinedAnalyzer", "⚠️ Frame dropped - still processing")
-            image.close()
-            return
-        }
-        
         lastAnalysisTime = now
         processedFrameCount++
         
-        // Convert image ONCE, then close it immediately
+        // Convert image ONCE, close immediately
         val rotationDegrees = image.imageInfo.rotationDegrees
         val bitmap = ImageUtils.imageProxyToBitmap(image)
-        image.close()  // Release camera buffer ASAP
+        image.close()  // Release ASAP
         
-        // Do ALL heavy work in background
-        scope.launch {
-            try {
-                val rotatedBitmap = ImageUtils.rotateBitmap(bitmap, rotationDegrees.toFloat())
-                
-                when (mode) {
-                    Mode.OBJECT_AND_TEXT -> processObjectsAndText(rotatedBitmap)
-                    Mode.READING_ONLY -> processTextOnly(rotatedBitmap)
-                    Mode.RECOGNITION_MODE -> processRecognition(rotatedBitmap)
+        // OPTIMIZED: Queue for async processing
+        val rotatedBitmap = ImageUtils.rotateBitmap(bitmap, rotationDegrees.toFloat())
+        val task = BitmapTask(rotatedBitmap, bitmap.width, bitmap.height)
+        
+        if (!bitmapQueue.offer(task)) {
+            Log.d("CombinedAnalyzer", "⚠️ Queue full, dropping frame")
+            return
+        }
+        
+        // Trigger processing based on mode
+        when (mode) {
+            Mode.OBJECT_AND_TEXT -> processObjectsAndText()
+            Mode.READING_ONLY -> processTextOnly()
+            Mode.RECOGNITION_MODE -> processRecognition()
+        }
+    }
+    
+    // OPTIMIZED: Detection with depth and position announcements
+    private fun processObjectsAndText() {
+        val task = bitmapQueue.poll() ?: return
+        val bitmap = task.bitmap
+        
+        // Detection job (high priority)
+        if (isDetecting.compareAndSet(false, true)) {
+            scope.launch(detectionDispatcher) {
+                try {
+                    val startTime = System.currentTimeMillis()
+                    val detections = objectDetector.detect(bitmap)
+                    val detectionTime = System.currentTimeMillis() - startTime
+                    
+                    Log.i("CombinedAnalyzer", "📦 DETECTIONS: ${detections.size} objects in ${detectionTime}ms")
+                    if (detections.isNotEmpty()) {
+                        detections.take(3).forEach { obj ->
+                            Log.i("CombinedAnalyzer", "  ✓ ${obj.label}: ${obj.confidencePercent()}")
+                        }
+                    }
+                    
+                    // Calculate depth for detected objects
+                    val depthData = mutableMapOf<String, ObjectWithDepth>()
+                    if (detections.isNotEmpty() && navigationEngine != null) {
+                        for (obj in detections) {
+                            val depth = navigationEngine.arCoreManager.getDepthForBoundingBox(obj.boundingBox)
+                            val position = getObjectPosition(obj, task.width, task.height)
+                            depthData[obj.label] = ObjectWithDepth(obj, depth, position)
+                        }
+                    }
+                    
+                    // Send to navigation with depth
+                    navigationEngine?.processObstacles(detections)
+                    
+                    // Update UI
+                    withContext(Dispatchers.Main) {
+                        overlayView?.objects = detections
+                        overlayView?.postInvalidate()
+                    }
+                    
+                    // Send to DecisionEngine with depth data
+                    decisionEngine.processWithDepth(depthData.values.toList())
+                    
+                } catch (e: Exception) {
+                    Log.e("CombinedAnalyzer", "Detection error", e)
+                } finally {
+                    isDetecting.set(false)
                 }
-            } catch (e: Exception) {
-                Log.e("CombinedAnalyzer", "Analysis error", e)
-            } finally {
-                isProcessing.set(false)
+            }
+        }
+         
+        // Background face recognition (if needed)
+        if (memoryManager != null && frameCount % 10 == 0) {
+            scope.launch(detectionDispatcher) {
+                val detections = overlayView?.objects ?: emptyList()
+                val personDetections = detections.filter { 
+                    it.label == "person" && it.confidence > 0.6f 
+                }
+                if (personDetections.isNotEmpty()) {
+                    tryRecognizeFaces(bitmap, personDetections)
+                }
             }
         }
     }
     
-    private suspend fun processObjectsAndText(bitmap: android.graphics.Bitmap) {
-        val startTime = System.currentTimeMillis()
+    // Calculate object position (left, center, right)
+    private fun getObjectPosition(obj: DetectedObject, imageWidth: Int, imageHeight: Int): String {
+        val centerX = obj.boundingBox.centerX()
+        val leftThird = imageWidth / 3f
+        val rightThird = imageWidth * 2f / 3f
         
-        // Run object detection in background
-        val detections = withContext(mlDispatcher) {
-            objectDetector.detect(bitmap)
-        }
-        
-        val detectionTime = System.currentTimeMillis() - startTime
-        
-        Log.i("CombinedAnalyzer", "📦 DETECTIONS: ${detections.size} objects in ${detectionTime}ms")
-        if (detections.isNotEmpty()) {
-            detections.take(3).forEach { obj ->
-                Log.i("CombinedAnalyzer", "  ✓ ${obj.label}: ${obj.confidencePercent()}")
-            }
-        }
-        
-        // Send to navigation (if active)
-        navigationEngine?.processObstacles(detections)
-        
-        // Run OCR asynchronously (don't block on it)
-        val ocrJob = scope.async(mlDispatcher) {
-            try {
-                ocrProcessor.detectSync(bitmap)
-            } catch (e: Exception) {
-                Log.e("CombinedAnalyzer", "OCR error", e)
-                emptyList<OCRLine>()
-            }
-        }
-        
-        // Wait for OCR with timeout
-        val texts = withTimeoutOrNull(500) {
-            ocrJob.await()
-        } ?: emptyList()
-        
-        if (texts.isNotEmpty()) {
-            Log.i("CombinedAnalyzer", "📝 TEXT: ${texts.size} lines detected")
-        }
-        
-        // CRITICAL: Process results and trigger announcements
-        val now = System.currentTimeMillis()
-        Log.d("CombinedAnalyzer", "🎤 Sending to DecisionEngine: ${detections.size} objects, ${texts.size} texts")
-        
-        if (texts.isNotEmpty() && now - lastTextDetectionTime > textCooldown) {
-            lastTextDetectionTime = now
-            decisionEngine.process(detections, texts)
-        } else {
-            // ALWAYS send detections to DecisionEngine
-            decisionEngine.process(detections, emptyList())
-        }
-        
-        // Background face recognition (non-blocking)
-        if (memoryManager != null && frameCount % 10 == 0) {
-            val personDetections = detections.filter { 
-                it.label == "person" && it.confidence > 0.6f 
-            }
-            if (personDetections.isNotEmpty()) {
-                tryRecognizeFaces(bitmap, personDetections)
-            }
-        }
-        
-        // Update UI on main thread
-        withContext(Dispatchers.Main) {
-            overlayView?.apply {
-                this.objects = detections
-                this.texts = texts
-                postInvalidate()
-            }
+        return when {
+            centerX < leftThird -> "on your left"
+            centerX > rightThird -> "on your right"
+            else -> "ahead"
         }
     }
 
-    private suspend fun processTextOnly(bitmap: android.graphics.Bitmap) {
-        val texts = withContext(mlDispatcher) {
-            ocrProcessor.detectSync(bitmap)
-        }
+    private fun processTextOnly() {
+        val task = bitmapQueue.poll() ?: return
+        val bitmap = task.bitmap
         
-        if (texts.isNotEmpty()) {
-            decisionEngine.process(emptyList(), texts)
-            
-            withContext(Dispatchers.Main) {
-                overlayView?.apply {
-                    this.objects = emptyList()
-                    this.texts = texts
-                    postInvalidate()
+        // ONLY OCR - no object detection in reading mode
+        if (isOCRing.compareAndSet(false, true)) {
+            scope.launch(ocrDispatcher) {
+                try {
+                    val texts = ocrProcessor.detectSync(bitmap)
+                    
+                    if (texts.isNotEmpty()) {
+                        Log.i("CombinedAnalyzer", "📖 READING MODE: ${texts.size} text blocks")
+                        
+                        // Update UI - clear objects, show only text
+                        withContext(Dispatchers.Main) {
+                            overlayView?.apply {
+                                this.objects = emptyList()  // Clear object boxes
+                                this.texts = texts
+                                postInvalidate()
+                            }
+                        }
+                        
+                        // Send ONLY text to decision engine
+                        decisionEngine.process(emptyList(), texts)
+                    }
+                } catch (e: Exception) {
+                    Log.e("CombinedAnalyzer", "OCR error", e)
+                } finally {
+                    isOCRing.set(false)
                 }
             }
         }
     }
     
-    private suspend fun processRecognition(bitmap: android.graphics.Bitmap) {
+    private fun processRecognition() {
+        val task = bitmapQueue.poll() ?: return
+        val bitmap = task.bitmap
+        
         if (memoryManager == null) return
         
         val now = System.currentTimeMillis()
         
         // Face recognition (throttled)
         if (now - lastFaceRecognitionTime > faceRecognitionCooldown) {
-            scope.launch(mlDispatcher) {
+            scope.launch(detectionDispatcher) {
                 try {
                     val faces = faceDetector.detectFaces(bitmap)
                     if (faces.isNotEmpty()) {
@@ -227,9 +259,9 @@ class CombinedAnalyzer(
             }
         }
         
-        // Place recognition (throttled even more)
+        // Place recognition (throttled more)
         if (now - lastPlaceRecognitionTime > placeRecognitionCooldown) {
-            scope.launch(mlDispatcher) {
+            scope.launch(detectionDispatcher) {
                 try {
                     val result = memoryManager.recognizePlace(bitmap)
                     if (result != null) {
@@ -245,33 +277,44 @@ class CombinedAnalyzer(
         }
     }
     
-    private fun tryRecognizeFaces(bitmap: android.graphics.Bitmap, @Suppress("UNUSED_PARAMETER") personDetections: List<DetectedObject>) {
+    private suspend fun tryRecognizeFaces(bitmap: Bitmap, @Suppress("UNUSED_PARAMETER") personDetections: List<DetectedObject>) {
         val now = System.currentTimeMillis()
         if (now - lastFaceRecognitionTime < faceRecognitionCooldown) return
         
-        scope.launch(mlDispatcher) {
-            try {
-                val faces = faceDetector.detectFaces(bitmap)
-                if (faces.isNotEmpty()) {
-                    val bestFace = faces.first()
-                    val result = memoryManager?.recognizeFace(bestFace.bitmap)
-                    
-                    if (result != null) {
-                        withContext(Dispatchers.Main) {
-                            ttsManager.speak("I see ${result.label}")
-                        }
-                        lastFaceRecognitionTime = now
+        try {
+            val faces = faceDetector.detectFaces(bitmap)
+            if (faces.isNotEmpty()) {
+                val bestFace = faces.first()
+                val result = memoryManager?.recognizeFace(bestFace.bitmap)
+                
+                if (result != null) {
+                    withContext(Dispatchers.Main) {
+                        ttsManager.speak("I see ${result.label}")
                     }
+                    lastFaceRecognitionTime = now
                 }
-            } catch (e: Exception) {
-                Log.e("CombinedAnalyzer", "Background face recognition error", e)
             }
+        } catch (e: Exception) {
+            Log.e("CombinedAnalyzer", "Background face recognition error", e)
         }
     }
     
     fun cleanup() {
         scope.cancel()
+        bitmapQueue.clear()
         faceDetector.shutdown()
         Log.d("CombinedAnalyzer", "Cleanup complete")
     }
+    
+    private data class BitmapTask(
+        val bitmap: Bitmap,
+        val width: Int,
+        val height: Int
+    )
+    
+    data class ObjectWithDepth(
+        val obj: DetectedObject,
+        val depth: Float?,
+        val position: String
+    )
 }
