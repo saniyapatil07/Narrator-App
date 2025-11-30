@@ -43,8 +43,8 @@ class CameraXManager(
                     }
 
                 val analysis = ImageAnalysis.Builder()
-                    // REDUCED resolution for better performance
-                    .setTargetResolution(Size(640, 480))
+                    // INCREASED resolution for better OCR (was 640×480)
+                    .setTargetResolution(Size(1280, 720))
                     .setTargetRotation(previewView.display.rotation)
                     // CRITICAL: Keep latest frame, drop old ones
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -60,7 +60,6 @@ class CameraXManager(
                     memoryManager = memoryManager
                 )
 
-                // CRITICAL: Run analyzer on dedicated background thread
                 analysis.setAnalyzer(cameraExecutor, analyzer!!)
 
                 try {
