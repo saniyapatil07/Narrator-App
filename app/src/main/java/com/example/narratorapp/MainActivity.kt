@@ -521,6 +521,12 @@ findViewById<Button>(R.id.btnAnnounceDetections)?.setOnClickListener {
         }
         
         VoiceCommandService.stop(this)
+        
+        // Shutdown camera first (releases resources)
+        if (::cameraXManager.isInitialized) {
+            cameraXManager.shutdown()
+        }
+        
         ttsManager.shutdown()
         memoryManager.cleanup()
         

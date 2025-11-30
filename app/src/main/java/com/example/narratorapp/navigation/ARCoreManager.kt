@@ -15,6 +15,10 @@ class ARCoreManager(private val context: Context) : DefaultLifecycleObserver {
     private var currentPose: Pose? = null
     
     private var onPoseUpdateListener: ((Pose) -> Unit)? = null
+    
+    // CRITICAL: Throttle ARCore updates to reduce CPU load
+    private var lastUpdateTime = 0L
+    private val updateInterval = 100L  // Update only every 100ms (10 FPS)
 
     fun initialize(): Boolean {
         return try {
@@ -22,11 +26,11 @@ class ARCoreManager(private val context: Context) : DefaultLifecycleObserver {
                 ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
                     arSession = Session(context)
                     configureSession()
-                    Log.i("ARCoreManager", "ARCore initialized successfully")
+                    Log.i("ARCoreManager", "ARCore initialized")
                     true
                 }
                 else -> {
-                    Log.e("ARCoreManager", "ARCore not supported on this device")
+                    Log.e("ARCoreManager", "ARCore not supported")
                     false
                 }
             }
@@ -39,16 +43,29 @@ class ARCoreManager(private val context: Context) : DefaultLifecycleObserver {
     private fun configureSession() {
         arSession?.let { session ->
             config = Config(session).apply {
-                depthMode = Config.DepthMode.AUTOMATIC
-                instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                // Use DISABLED for better performance - only enable if you need depth
+                depthMode = Config.DepthMode.DISABLED  
+                instantPlacementMode = Config.InstantPlacementMode.DISABLED
                 focusMode = Config.FocusMode.AUTO
-                planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                planeFindingMode = Config.PlaneFindingMode.HORIZONTAL  // Only horizontal
+                
+                // Reduce update rate for better performance
+                updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
             }
             session.configure(config)
         }
     }
     
     fun update(): Frame? {
+        val now = System.currentTimeMillis()
+        
+        // CRITICAL: Throttle updates
+        if (now - lastUpdateTime < updateInterval) {
+            return null
+        }
+        
+        lastUpdateTime = now
+        
         return try {
             arSession?.update()?.also { frame ->
                 val camera = frame.camera
@@ -83,18 +100,15 @@ class ARCoreManager(private val context: Context) : DefaultLifecycleObserver {
         return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
     }
     
-    //distance to specific 2d point on screen
     fun getDistanceFromScreenPoint(x: Float, y: Float): Float? {
-        val frame = arSession?.update()?: return null
-
+        val frame = arSession?.update() ?: return null
         val hitResults = frame.hitTest(x, y)
-
         val closestHit = hitResults.firstOrNull { 
-        it.trackable is Plane || it.trackable is Point 
+            it.trackable is Plane || it.trackable is Point 
+        }
+        return closestHit?.distance
     }
     
-    return closestHit?.distance
-    }
     fun createAnchor(pose: Pose): Anchor? {
         return try {
             arSession?.createAnchor(pose)
@@ -110,11 +124,13 @@ class ARCoreManager(private val context: Context) : DefaultLifecycleObserver {
     
     override fun onPause(owner: LifecycleOwner) {
         arSession?.pause()
+        Log.d("ARCoreManager", "Paused")
     }
     
     override fun onResume(owner: LifecycleOwner) {
         try {
             arSession?.resume()
+            Log.d("ARCoreManager", "Resumed")
         } catch (e: CameraNotAvailableException) {
             Log.e("ARCoreManager", "Camera not available on resume", e)
         }
@@ -123,5 +139,6 @@ class ARCoreManager(private val context: Context) : DefaultLifecycleObserver {
     fun cleanup() {
         arSession?.close()
         arSession = null
+        Log.d("ARCoreManager", "Cleaned up")
     }
 }

@@ -14,7 +14,7 @@ import kotlin.math.min
 
 class ObjectDetector(context: Context) {
 
-    private val confidenceThreshold = 0.10f  // LOWERED for testing - you should see detections now!
+    private val confidenceThreshold = 0.1f
     private val iouThreshold = 0.5f
     private val inputSize = 320
     private val numThreads = 4
@@ -74,38 +74,48 @@ class ObjectDetector(context: Context) {
         val inferenceTime = SystemClock.uptimeMillis() - startTime
         Log.i("ObjectDetector", "Inference time: $inferenceTime ms")
 
-        // Debug: Check what the model is actually outputting
+        // Debug output statistics
         if (outputBuffer[0].isNotEmpty()) {
-            val maxObj = outputBuffer[0].maxOfOrNull { it[4] } ?: 0f
-            val maxClass = outputBuffer[0].maxOfOrNull { pred -> 
+            val allObjectness = outputBuffer[0].map { it[4] }
+            val maxObj = allObjectness.maxOrNull() ?: 0f
+            val avgObj = allObjectness.average().toFloat()
+            
+            val allClassScores = outputBuffer[0].map { pred -> 
                 (5 until pred.size).maxOfOrNull { pred[it] } ?: 0f 
-            } ?: 0f
+            }
+            val maxClass = allClassScores.maxOrNull() ?: 0f
+            val avgClass = allClassScores.average().toFloat()
+            
+            Log.i("ObjectDetector", "Objectness - max: $maxObj, avg: $avgObj")
+            Log.i("ObjectDetector", "Class scores - max: $maxClass, avg: $avgClass")
+            
+            // Find best prediction for debugging
             val bestPrediction = outputBuffer[0].maxByOrNull { pred ->
-                pred[4] * ((5 until pred.size).maxOfOrNull { pred[it] } ?: 0f)
+                val obj = pred[4]
+                val cls = (5 until pred.size).maxOfOrNull { pred[it] } ?: 0f
+                obj * cls
             }
             
             if (bestPrediction != null) {
                 val bestObj = bestPrediction[4]
-                val bestClass = (5 until bestPrediction.size).maxOfOrNull { bestPrediction[it] } ?: 0f
-                val bestClassId = (5 until bestPrediction.size).maxByOrNull { bestPrediction[it] } ?: 5
+                val bestClassIdx = (5 until bestPrediction.size).maxByOrNull { bestPrediction[it] } ?: 5
+                val bestClass = bestPrediction[bestClassIdx]
                 val bestConf = bestObj * bestClass
                 
-                Log.i("ObjectDetector", "Best prediction: ${labels.getOrNull(bestClassId - 5) ?: "?"} " +
-                      "obj=$bestObj × class=$bestClass = $bestConf")
+                Log.i("ObjectDetector", "Best: ${labels.getOrNull(bestClassIdx - 5) ?: "?"} " +
+                      "obj=$bestObj × cls=$bestClass = $bestConf")
             }
-            
-            Log.i("ObjectDetector", "Max objectness: $maxObj, Max class score: $maxClass")
         }
 
         val detections = decodeYOLO(outputBuffer[0], bitmap.width, bitmap.height)
-        Log.i("ObjectDetector", "Detections before NMS: ${detections.size}")
+        Log.i("ObjectDetector", "Raw detections: ${detections.size}")
         
         val finalDetections = nonMaxSuppression(detections)
-        Log.i("ObjectDetector", "Final detections: ${finalDetections.size}")
+        Log.i("ObjectDetector", "After NMS: ${finalDetections.size}")
         
         if (finalDetections.isNotEmpty()) {
             finalDetections.take(3).forEach { obj ->
-                Log.i("ObjectDetector", "✓ DETECTED: ${obj.label} at ${obj.confidencePercent()}")
+                Log.i("ObjectDetector", "✓ ${obj.label} at ${obj.confidencePercent()}")
             }
         }
         
@@ -119,10 +129,30 @@ class ObjectDetector(context: Context) {
         val intValues = IntArray(inputSize * inputSize)
         bitmap.getPixels(intValues, 0, inputSize, 0, 0, inputSize, inputSize)
 
+        // ImageNet Mean and StdDev values (from your report)
+        // These are standard for models trained on ImageNet (like many TFLite object detectors)
+        val MEAN_R = 123.675f
+        val MEAN_G = 116.28f
+        val MEAN_B = 103.53f
+        
+        val STD_R = 58.395f
+        val STD_G = 57.12f
+        val STD_B = 57.375f
+
         for (pixel in intValues) {
-            buffer.putFloat(((pixel shr 16 and 0xFF) / 255.0f))
-            buffer.putFloat(((pixel shr 8 and 0xFF) / 255.0f))
-            buffer.putFloat(((pixel and 0xFF) / 255.0f))
+            val r = (pixel shr 16 and 0xFF).toFloat()
+            val g = (pixel shr 8 and 0xFF).toFloat()
+            val b = (pixel and 0xFF).toFloat()
+
+            // Apply ImageNet Normalization: (value - mean) / std
+            // buffer.putFloat((r - MEAN_R) / STD_R)
+            // buffer.putFloat((g - MEAN_G) / STD_G)
+            // buffer.putFloat((b - MEAN_B) / STD_B)
+
+            // Only try this if the ImageNet fix above doesn't work perfectly
+            buffer.putFloat((b - MEAN_B) / STD_B) // Blue first
+            buffer.putFloat((g - MEAN_G) / STD_G) // Green
+            buffer.putFloat((r - MEAN_R) / STD_R) // Red
         }
         
         buffer.rewind()

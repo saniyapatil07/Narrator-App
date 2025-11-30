@@ -13,6 +13,8 @@ import androidx.lifecycle.LifecycleOwner
 import com.example.narratorapp.memory.MemoryManager
 import com.example.narratorapp.narration.TTSManager
 import com.example.narratorapp.navigation.NavigationEngine
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class CameraXManager(
     private val context: Context,
@@ -24,6 +26,9 @@ class CameraXManager(
 ) {
     private var analyzer: CombinedAnalyzer? = null
     
+    // CRITICAL: Dedicated background thread for camera analysis
+    private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    
     fun start() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener(
@@ -31,14 +36,20 @@ class CameraXManager(
                 val cameraProvider = cameraProviderFuture.get()
                 val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
+                val preview = Preview.Builder()
+                    .build()
+                    .also {
+                        it.setSurfaceProvider(previewView.surfaceProvider)
+                    }
 
                 val analysis = ImageAnalysis.Builder()
+                    // REDUCED resolution for better performance
                     .setTargetResolution(Size(640, 480))
                     .setTargetRotation(previewView.display.rotation)
+                    // CRITICAL: Keep latest frame, drop old ones
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    // Lower output format for speed
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .build()
 
                 analyzer = CombinedAnalyzer(
@@ -49,10 +60,8 @@ class CameraXManager(
                     memoryManager = memoryManager
                 )
 
-                analysis.setAnalyzer(
-                    ContextCompat.getMainExecutor(context),
-                    analyzer!!
-                )
+                // CRITICAL: Run analyzer on dedicated background thread
+                analysis.setAnalyzer(cameraExecutor, analyzer!!)
 
                 try {
                     cameraProvider.unbindAll()
@@ -62,7 +71,7 @@ class CameraXManager(
                         preview,
                         analysis
                     )
-                    Log.d("CameraXManager", "Camera started successfully")
+                    Log.d("CameraXManager", "Camera started on background thread")
                 } catch (e: Exception) {
                     Log.e("CameraXManager", "Use case binding failed", e)
                 }
@@ -75,5 +84,7 @@ class CameraXManager(
     
     fun shutdown() {
         analyzer?.cleanup()
+        cameraExecutor.shutdown()
+        Log.d("CameraXManager", "Camera and executor shut down")
     }
 }

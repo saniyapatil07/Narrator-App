@@ -3,6 +3,7 @@ package com.example.narratorapp.voice
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -28,7 +29,11 @@ class VoiceCommandService : Service() {
         fun start(context: Context) {
             val intent = Intent(context, VoiceCommandService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
+                try {
+                    context.startForegroundService(intent)
+                } catch (e: Exception) {
+                    Log.e("VoiceCommandService", "Failed to start foreground service", e)
+                }
             } else {
                 context.startService(intent)
             }
@@ -48,25 +53,34 @@ class VoiceCommandService : Service() {
         super.onCreate()
         Log.d("VoiceCommandService", "Service created")
         
+        // Create notification channel FIRST
+        createNotificationChannel()
+        
+        // Start foreground IMMEDIATELY (Android 12+ requirement)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID, 
+                    createNotification(false),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, createNotification(false))
+            }
+            Log.d("VoiceCommandService", "Foreground service started successfully")
+        } catch (e: Exception) {
+            Log.e("VoiceCommandService", "Failed to start foreground service", e)
+            stopSelf()
+            return
+        }
+        
+        // Initialize components AFTER foreground is established
         ttsManager = TTSManager(this)
         voiceCommandManager = VoiceCommandManager(this, ttsManager)
         
         voiceCommandManager.setOnCommandRecognizedListener { command ->
             Log.d("VoiceCommandService", "Command recognized: ${command.getDescription()}")
             commandCallback?.invoke(command)
-        }
-        
-        createNotificationChannel()
-        try {
-            // Wrap this in try-catch to stop the crash on Android 12+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, createNotification(false), 
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-            } else {
-                startForeground(NOTIFICATION_ID, createNotification(false))
-            }
-        } catch (e: Exception) {
-            Log.e("VoiceCommandService", "Failed to start foreground service", e)
         }
     }
     
@@ -84,17 +98,25 @@ class VoiceCommandService : Service() {
     }
     
     fun startListening(startWithHotword: Boolean = true) {
-        voiceCommandManager.startListening(startWithHotword)
-        updateNotification(true)
+        if (::voiceCommandManager.isInitialized) {
+            voiceCommandManager.startListening(startWithHotword)
+            updateNotification(true)
+        }
     }
     
     fun stopListening() {
-        voiceCommandManager.stopListening()
-        updateNotification(false)
+        if (::voiceCommandManager.isInitialized) {
+            voiceCommandManager.stopListening()
+            updateNotification(false)
+        }
     }
     
     fun isListening(): Boolean {
-        return voiceCommandManager.isCurrentlyListening()
+        return if (::voiceCommandManager.isInitialized) {
+            voiceCommandManager.isCurrentlyListening()
+        } else {
+            false
+        }
     }
     
     fun setCommandCallback(callback: (VoiceCommand) -> Unit) {
@@ -110,6 +132,7 @@ class VoiceCommandService : Service() {
             ).apply {
                 description = "Narrator app voice command service"
                 setShowBadge(false)
+                setSound(null, null)  // Disable notification sound
             }
             
             val notificationManager = getSystemService(NotificationManager::class.java)
@@ -127,6 +150,7 @@ class VoiceCommandService : Service() {
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
+            .setSilent(true)  // No sound/vibration
             .build()
     }
     
@@ -138,8 +162,12 @@ class VoiceCommandService : Service() {
     
     override fun onDestroy() {
         super.onDestroy()
-        voiceCommandManager.cleanup()
-        ttsManager.shutdown()
+        if (::voiceCommandManager.isInitialized) {
+            voiceCommandManager.cleanup()
+        }
+        if (::ttsManager.isInitialized) {
+            ttsManager.shutdown()
+        }
         Log.d("VoiceCommandService", "Service destroyed")
     }
 }
