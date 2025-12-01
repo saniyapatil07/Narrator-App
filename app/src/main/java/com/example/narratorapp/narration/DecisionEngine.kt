@@ -58,10 +58,10 @@ class DecisionEngine(private val ttsManager: TTSManager) {
         
         // Priority 1: Announce text if present
         if (texts.isNotEmpty()) {
-            if (now - lastNarrationTime > narrationCooldown) {
+            // if (now - lastNarrationTime > narrationCooldown) {
                 announceText(texts.first())
-                lastNarrationTime = now
-            }
+                // lastNarrationTime = now
+            // }
             return
         }
         
@@ -73,22 +73,29 @@ class DecisionEngine(private val ttsManager: TTSManager) {
             objectDetectionCount.clear()
         }
     }
+
     
+    private var lastSpokenText = ""
+
     private fun announceText(text: OCRLine) {
         val cleanText = text.text.trim()
         if (cleanText.length < 2) {
             Log.d("DecisionEngine", "Skipping single character: '$cleanText'")
             return
         }
-        
-        val announcement = if (cleanText.length > 50) {
-            cleanText.take(50)
-        } else {
-            cleanText
+
+        if (cleanText == lastSpokenText && (System.currentTimeMillis() - lastNarrationTime) < 2000) {
+        return
         }
+
+        val announcement = cleanText.take(50)
+        ttsManager.speak(announcement)
+    
+        lastSpokenText = cleanText
+        lastNarrationTime = System.currentTimeMillis()
         
         Log.i("DecisionEngine", "🔊 READING: $announcement")
-        ttsManager.speak(announcement)
+        // ttsManager.speak(announcement)
     }
     
     private fun announceObjectsWithDepth(objectsWithDepth: List<CombinedAnalyzer.ObjectWithDepth>, now: Long) {

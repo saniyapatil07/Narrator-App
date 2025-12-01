@@ -102,8 +102,8 @@ class CombinedAnalyzer(
         image.close()  // Release ASAP
         
         // OPTIMIZED: Queue for async processing
-        val rotatedBitmap = ImageUtils.rotateBitmap(bitmap, rotationDegrees.toFloat())
-        val task = BitmapTask(rotatedBitmap, bitmap.width, bitmap.height)
+        // val rotatedBitmap = ImageUtils.rotateBitmap(bitmap, rotationDegrees.toFloat())
+        val task = BitmapTask(bitmap, bitmap.width, bitmap.height, rotationDegrees)
         
         if (!bitmapQueue.offer(task)) {
             Log.d("CombinedAnalyzer", "⚠️ Queue full, dropping frame")
@@ -131,6 +131,10 @@ class CombinedAnalyzer(
                     val detections = objectDetector.detect(bitmap)
                     val detectionTime = System.currentTimeMillis() - startTime
                     
+                    if (mode != Mode.OBJECT_AND_TEXT) {
+                    Log.i("CombinedAnalyzer", "⚠️ Dropping object detection result (Mode changed)")
+                    return@launch
+                    }
                     Log.i("CombinedAnalyzer", "📦 DETECTIONS: ${detections.size} objects in ${detectionTime}ms")
                     if (detections.isNotEmpty()) {
                         detections.take(3).forEach { obj ->
@@ -203,7 +207,7 @@ class CombinedAnalyzer(
         if (isOCRing.compareAndSet(false, true)) {
             scope.launch(ocrDispatcher) {
                 try {
-                    val texts = ocrProcessor.detectSync(bitmap)
+                    val texts = ocrProcessor.detectSync(bitmap,rotationDegrees = task.rotationDegrees)
                     
                     if (texts.isNotEmpty()) {
                         Log.i("CombinedAnalyzer", "📖 READING MODE: ${texts.size} text blocks")
@@ -309,7 +313,8 @@ class CombinedAnalyzer(
     private data class BitmapTask(
         val bitmap: Bitmap,
         val width: Int,
-        val height: Int
+        val height: Int,
+        val rotationDegrees: Int
     )
     
     data class ObjectWithDepth(

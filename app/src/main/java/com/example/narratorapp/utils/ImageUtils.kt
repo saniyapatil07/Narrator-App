@@ -19,14 +19,29 @@ object ImageUtils {
         val nv21 = ByteArray(ySize + uSize + vSize)
 
         yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
+        
+        val pixelStride = image.planes[1].pixelStride
+    val rowStride = image.planes[1].rowStride
+    val width = image.width
+    val height = image.height
 
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 100, out)
-        val yuvByteArray = out.toByteArray()
-        return BitmapFactory.decodeByteArray(yuvByteArray, 0, yuvByteArray.size)
+    var pos = ySize
+    for (row in 0 until height / 2) {
+        for (col in 0 until width / 2) {
+            val vIndex = row * rowStride + col * pixelStride
+            val uIndex = row * rowStride + col * pixelStride
+            
+            // NV21 format expects V first, then U
+            nv21[pos++] = vBuffer.get(vIndex)
+            nv21[pos++] = uBuffer.get(uIndex)
+        }
+    }
+
+    val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+    val out = ByteArrayOutputStream()
+    yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
+    val yuvByteArray = out.toByteArray()
+    return BitmapFactory.decodeByteArray(yuvByteArray, 0, yuvByteArray.size)
     }
 
     fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Float): Bitmap {

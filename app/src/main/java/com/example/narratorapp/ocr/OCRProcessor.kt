@@ -42,10 +42,10 @@ class OCRProcessor {
     }
     
     // NEW: Synchronous coroutine-friendly method
-    suspend fun detectSync(bitmap: Bitmap): List<OCRLine> {
+    suspend fun detectSync(bitmap: Bitmap, rotationDegrees: Int): List<OCRLine> {
         return try {
             // CRITICAL: Don't rotate the bitmap - use rotation parameter
-            val image = InputImage.fromBitmap(bitmap, 0)
+            val image = InputImage.fromBitmap(bitmap, rotationDegrees)
             val visionText = recognizer.process(image).await()
             
             val results = mutableListOf<OCRLine>()

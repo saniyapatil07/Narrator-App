@@ -139,9 +139,9 @@ class ObjectDetector(context: Context) {
             val g = (pixel shr 8 and 0xFF).toFloat()
             val b = (pixel and 0xFF).toFloat()
 
-            buffer.putFloat((b - MEAN_B) / STD_B)
+            buffer.putFloat((b - MEAN_B) / STD_R)
             buffer.putFloat((g - MEAN_G) / STD_G)
-            buffer.putFloat((r - MEAN_R) / STD_R)
+            buffer.putFloat((r - MEAN_R) / STD_B)
         }
     }
 
