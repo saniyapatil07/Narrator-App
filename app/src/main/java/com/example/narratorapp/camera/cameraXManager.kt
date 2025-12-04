@@ -25,8 +25,6 @@ class CameraXManager(
     private val memoryManager: MemoryManager? = null
 ) {
     private var analyzer: CombinedAnalyzer? = null
-    
-    // CRITICAL: Dedicated background thread for camera analysis
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     
     fun start() {
@@ -42,13 +40,13 @@ class CameraXManager(
                         it.setSurfaceProvider(previewView.surfaceProvider)
                     }
 
+                // CRITICAL FIX: Use 1280x720 for better detection
+                val targetResolution = Size(1280, 720)
+                
                 val analysis = ImageAnalysis.Builder()
-                    // INCREASED resolution for better OCR (was 640×480)
-                    .setTargetResolution(Size(1280, 720))
+                    .setTargetResolution(targetResolution)
                     .setTargetRotation(previewView.display.rotation)
-                    // CRITICAL: Keep latest frame, drop old ones
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    // Lower output format for speed
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .build()
 
@@ -64,12 +62,25 @@ class CameraXManager(
 
                 try {
                     cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
+                    val camera = cameraProvider.bindToLifecycle(
                         context as LifecycleOwner,
                         cameraSelector,
                         preview,
                         analysis
                     )
+                    
+                    // ===== CRITICAL FIX: Update overlay with actual image dimensions =====
+                    // Wait for first frame to get actual dimensions
+                    previewView.post {
+                        val rotation = previewView.display.rotation
+                        overlayView.updateSourceSize(
+                            targetResolution.width,
+                            targetResolution.height,
+                            rotation
+                        )
+                        Log.i("CameraXManager", "✓ Overlay dimensions set: ${targetResolution.width}x${targetResolution.height}, rotation=$rotation")
+                    }
+                    
                     Log.d("CameraXManager", "Camera started on background thread")
                 } catch (e: Exception) {
                     Log.e("CameraXManager", "Use case binding failed", e)

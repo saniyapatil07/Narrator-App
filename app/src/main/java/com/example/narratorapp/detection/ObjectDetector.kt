@@ -15,11 +15,12 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * FIXED VERSION - Correct YOLO coordinate normalization
+ * FIXED VERSION - Correct preprocessing and color channels
  */
 class ObjectDetector(context: Context) {
 
-    private val confidenceThreshold = 0.1f
+    // ===== TUNED THRESHOLDS =====
+    private val confidenceThreshold = 0.25f  // ✅ Raised from 0.1 to reduce false positives
     private val iouThreshold = 0.5f
     private val inputSize = 320
     private val numThreads = 4
@@ -86,7 +87,7 @@ class ObjectDetector(context: Context) {
             Log.i("ObjectDetector", "=== MODEL INFO ===")
             Log.i("ObjectDetector", "Input: ${inputTensor.shape().contentToString()}")
             Log.i("ObjectDetector", "Output: ${outputShape.contentToString()}")
-            Log.i("ObjectDetector", "GPU: ${gpuDelegate != null}, NNAPI: ${options.useNNAPI}")
+            Log.i("ObjectDetector", "Confidence threshold: $confidenceThreshold")
             
         } catch (e: Exception) {
             Log.e("ObjectDetector", "Error loading model", e)
@@ -96,9 +97,11 @@ class ObjectDetector(context: Context) {
     fun detect(bitmap: Bitmap): List<DetectedObject> {
         if (interpreter == null) return emptyList()
 
-        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+        var resizedBitmap: Bitmap? = null
         
         try {
+            resizedBitmap = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+            
             inputBuffer.rewind()
             bitmapToByteBuffer(resizedBitmap, inputBuffer)
 
@@ -113,21 +116,45 @@ class ObjectDetector(context: Context) {
             val detections = decodeYOLO(outputBuffer[0], bitmap.width, bitmap.height)
             val finalDetections = nonMaxSuppression(detections)
             
+            // ===== NEW: Log detections for debugging =====
+            if (finalDetections.isNotEmpty()) {
+                Log.d("ObjectDetector", "Detected ${finalDetections.size} objects:")
+                finalDetections.take(5).forEach { obj ->
+                    Log.d("ObjectDetector", "  - ${obj.label}: ${obj.confidencePercent()}")
+                }
+            }
+            
             return finalDetections
         } finally {
             // Clean up scaled bitmap
-            if (resizedBitmap != bitmap) {
+            if (resizedBitmap != null && resizedBitmap != bitmap) {
                 resizedBitmap.recycle()
             }
         }
     }
 
+    // ===== CRITICAL FIX: Correct preprocessing =====
     private fun bitmapToByteBuffer(bitmap: Bitmap, buffer: ByteBuffer) {
         buffer.rewind()
 
         val intValues = IntArray(inputSize * inputSize)
         bitmap.getPixels(intValues, 0, inputSize, 0, 0, inputSize, inputSize)
 
+        // ===== TRY OPTION 1 FIRST: Simple [0,1] normalization =====
+        // Most YOLO models use this (YOLOv5, YOLOv8, etc.)
+        // for (pixel in intValues) {
+        //     val r = ((pixel shr 16) and 0xFF) / 255.0f
+        //     val g = ((pixel shr 8) and 0xFF) / 255.0f
+        //     val b = (pixel and 0xFF) / 255.0f
+            
+        //     // IMPORTANT: YOLO expects RGB order
+        //     buffer.putFloat(r)
+        //     buffer.putFloat(g)
+        //     buffer.putFloat(b)
+        // }
+        
+        // ===== IF OPTION 1 DOESN'T WORK, TRY OPTION 2: ImageNet normalization =====
+        // But with CORRECT channel assignments!
         val MEAN_R = 123.675f
         val MEAN_G = 116.28f
         val MEAN_B = 103.53f
@@ -136,24 +163,44 @@ class ObjectDetector(context: Context) {
         val STD_B = 57.375f
 
         for (pixel in intValues) {
-            val r = (pixel shr 16 and 0xFF).toFloat()
-            val g = (pixel shr 8 and 0xFF).toFloat()
+            val r = ((pixel shr 16) and 0xFF).toFloat()
+            val g = ((pixel shr 8) and 0xFF).toFloat()
             val b = (pixel and 0xFF).toFloat()
 
-            buffer.putFloat((b - MEAN_B) / STD_R)
-            buffer.putFloat((g - MEAN_G) / STD_G)
-            buffer.putFloat((r - MEAN_R) / STD_B)
+            // ✅ FIXED: Correct channel-to-std mapping
+            buffer.putFloat((b - MEAN_B) / STD_B)  // B with B std
+            buffer.putFloat((g - MEAN_G) / STD_G)  // G with G std
+            buffer.putFloat((r - MEAN_R) / STD_R)  // R with R std
+            
         }
+        
+        
+        /* ===== IF OPTION 2 DOESN'T WORK, TRY OPTION 3: [-1,1] normalization =====
+        for (pixel in intValues) {
+            val r = ((pixel shr 16) and 0xFF) / 255.0f
+            val g = ((pixel shr 8) and 0xFF) / 255.0f
+            val b = (pixel and 0xFF) / 255.0f
+            
+            // Normalize to [-1, 1]
+            buffer.putFloat((r - 0.5f) * 2.0f)
+            buffer.putFloat((g - 0.5f) * 2.0f)
+            buffer.putFloat((b - 0.5f) * 2.0f)
+        }
+        */
     }
 
-    // ===== CRITICAL FIX: Correct YOLO coordinate decoding =====
     private fun decodeYOLO(output: Array<FloatArray>, originalWidth: Int, originalHeight: Int): MutableList<DetectedObject> {
         val results = mutableListOf<DetectedObject>()
+        var totalPredictions = 0
+        var passedObjectness = 0
+        var passedConfidence = 0
         
         for (prediction in output) {
+            totalPredictions++
             val objectness = prediction[4]
             
             if (objectness < confidenceThreshold) continue
+            passedObjectness++
             
             // Find best class
             var maxClassScore = 0f
@@ -167,48 +214,43 @@ class ObjectDetector(context: Context) {
             
             val confidence = objectness * maxClassScore
             if (confidence < confidenceThreshold) continue
+            passedConfidence++
 
-            // ===== CRITICAL FIX: YOLO outputs are ALREADY normalized [0,1] =====
-            // prediction[0] = center_x (0.0 to 1.0)
-            // prediction[1] = center_y (0.0 to 1.0)
-            // prediction[2] = width (0.0 to 1.0)
-            // prediction[3] = height (0.0 to 1.0)
+            // YOLO outputs are normalized [0,1]
+            val xCenter = prediction[0]
+            val yCenter = prediction[1]
+            val width = prediction[2]
+            val height = prediction[3]
             
-            val xCenter = prediction[0]  // Already 0-1
-            val yCenter = prediction[1]  // Already 0-1
-            val width = prediction[2]    // Already 0-1
-            val height = prediction[3]   // Already 0-1
-            
-            // Convert center coordinates to top-left corner
+            // Convert to corners
             val xMin = xCenter - (width / 2f)
             val yMin = yCenter - (height / 2f)
             val xMax = xMin + width
             val yMax = yMin + height
             
-            // Now scale to original image dimensions
-            val left = xMin * originalWidth
-            val top = yMin * originalHeight
-            val right = xMax * originalWidth
-            val bottom = yMax * originalHeight
+            // Scale to image dimensions
+            val left = (xMin * originalWidth).coerceIn(0f, originalWidth.toFloat())
+            val top = (yMin * originalHeight).coerceIn(0f, originalHeight.toFloat())
+            val right = (xMax * originalWidth).coerceIn(0f, originalWidth.toFloat())
+            val bottom = (yMax * originalHeight).coerceIn(0f, originalHeight.toFloat())
             
-            // Clamp to image bounds
-            val clampedLeft = left.coerceIn(0f, originalWidth.toFloat())
-            val clampedTop = top.coerceIn(0f, originalHeight.toFloat())
-            val clampedRight = right.coerceIn(0f, originalWidth.toFloat())
-            val clampedBottom = bottom.coerceIn(0f, originalHeight.toFloat())
-            
-            // Validate box size
-            if (clampedRight <= clampedLeft || clampedBottom <= clampedTop) {
-                continue  // Invalid box
-            }
+            // Validate box
+            if (right <= left || bottom <= top) continue
 
             results.add(
                 DetectedObject(
                     label = labels.getOrElse(classId) { "Unknown" },
                     confidence = confidence,
-                    boundingBox = RectF(clampedLeft, clampedTop, clampedRight, clampedBottom)
+                    boundingBox = RectF(left, top, right, bottom)
                 )
             )
+        }
+        
+        // ===== NEW: Debug logging =====
+        if (totalPredictions > 0 && Math.random() < 0.1) {
+            Log.d("ObjectDetector", "Decode stats: $totalPredictions predictions, " +
+                  "$passedObjectness passed objectness, $passedConfidence passed confidence, " +
+                  "${results.size} after NMS")
         }
         
         return results

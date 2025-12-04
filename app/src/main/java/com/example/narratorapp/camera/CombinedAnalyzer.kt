@@ -19,10 +19,6 @@ import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.LinkedBlockingQueue
 
-/**
- * DROP-IN REPLACEMENT for existing CombinedAnalyzer
- * Same API, optimized with double-buffering and parallel processing
- */
 class CombinedAnalyzer(
     private val context: Context,
     private val ttsManager: TTSManager,
@@ -36,7 +32,6 @@ class CombinedAnalyzer(
     private val faceDetector = FaceDetector()
     private val decisionEngine = DecisionEngine(ttsManager)
     
-    // OPTIMIZED: Separate dispatchers for parallel execution
     @OptIn(ExperimentalCoroutinesApi::class)
     private val detectionDispatcher = Dispatchers.Default.limitedParallelism(1)
     
@@ -44,15 +39,10 @@ class CombinedAnalyzer(
     private val ocrDispatcher = Dispatchers.Default.limitedParallelism(1)
     
     private val scope = CoroutineScope(SupervisorJob())
-    
-    // OPTIMIZED: Double buffer queue
     private val bitmapQueue = LinkedBlockingQueue<BitmapTask>(2)
-    
-    // OPTIMIZED: Processing flags
     private val isDetecting = AtomicBoolean(false)
     private val isOCRing = AtomicBoolean(false)
     
-    // Same throttling as before
     private var lastAnalysisTime = 0L
     private val analysisInterval = 200L
     
@@ -67,6 +57,9 @@ class CombinedAnalyzer(
     
     private var frameCount = 0
     private var processedFrameCount = 0
+    
+    // ===== NEW: Track if dimensions were set =====
+    private var dimensionsInitialized = false
 
     enum class Mode {
         OBJECT_AND_TEXT,
@@ -77,32 +70,39 @@ class CombinedAnalyzer(
     var mode = Mode.OBJECT_AND_TEXT
 
     override fun analyze(image: ImageProxy) {
+    try {
         val now = System.currentTimeMillis()
         frameCount++
         
-        // Stats logging (same as before)
+        // ===== CRITICAL FIX: Update overlay dimensions on first frame =====
+        if (!dimensionsInitialized && overlayView != null) {
+            val width = image.width
+            val height = image.height
+            val rotation = image.imageInfo.rotationDegrees
+            
+            overlayView.post {
+                overlayView.updateSourceSize(width, height, rotation)
+                Log.i("CombinedAnalyzer", "✓ Overlay updated: ${width}x${height}, rotation=$rotation")
+            }
+            dimensionsInitialized = true
+        }
+        
         if (frameCount % 30 == 0) {
             Log.i("CombinedAnalyzer", "=== FRAME STATS ===")
             Log.i("CombinedAnalyzer", "Total frames: $frameCount, Processed: $processedFrameCount")
             Log.i("CombinedAnalyzer", "Processing rate: ${(processedFrameCount.toFloat() / frameCount * 100).toInt()}%")
         }
         
-        // Throttle frame rate
         if (now - lastAnalysisTime < analysisInterval) {
-            image.close()
-            return
+            return  // Will close in finally
         }
         
         lastAnalysisTime = now
         processedFrameCount++
         
-        // Convert image ONCE, close immediately
         val rotationDegrees = image.imageInfo.rotationDegrees
         val bitmap = ImageUtils.imageProxyToBitmap(image)
-        image.close()  // Release ASAP
         
-        // OPTIMIZED: Queue for async processing
-        // val rotatedBitmap = ImageUtils.rotateBitmap(bitmap, rotationDegrees.toFloat())
         val task = BitmapTask(bitmap, bitmap.width, bitmap.height, rotationDegrees)
         
         if (!bitmapQueue.offer(task)) {
@@ -110,20 +110,20 @@ class CombinedAnalyzer(
             return
         }
         
-        // Trigger processing based on mode
         when (mode) {
             Mode.OBJECT_AND_TEXT -> processObjectsAndText()
             Mode.READING_ONLY -> processTextOnly()
             Mode.RECOGNITION_MODE -> processRecognition()
         }
+    } finally {
+        image.close()  // ← ALWAYS close, even if exception
     }
+}
     
-    // OPTIMIZED: Detection with depth and position announcements
     private fun processObjectsAndText() {
         val task = bitmapQueue.poll() ?: return
         val bitmap = task.bitmap
         
-        // Detection job (high priority)
         if (isDetecting.compareAndSet(false, true)) {
             scope.launch(detectionDispatcher) {
                 try {
@@ -132,17 +132,17 @@ class CombinedAnalyzer(
                     val detectionTime = System.currentTimeMillis() - startTime
                     
                     if (mode != Mode.OBJECT_AND_TEXT) {
-                    Log.i("CombinedAnalyzer", "⚠️ Dropping object detection result (Mode changed)")
-                    return@launch
+                        Log.i("CombinedAnalyzer", "⚠️ Dropping object detection result (Mode changed)")
+                        return@launch
                     }
+                    
                     Log.i("CombinedAnalyzer", "📦 DETECTIONS: ${detections.size} objects in ${detectionTime}ms")
                     if (detections.isNotEmpty()) {
                         detections.take(3).forEach { obj ->
-                            Log.i("CombinedAnalyzer", "  ✓ ${obj.label}: ${obj.confidencePercent()}")
+                            Log.i("CombinedAnalyzer", "  ✓ ${obj.label}: ${obj.confidencePercent()} at (${obj.boundingBox.left.toInt()},${obj.boundingBox.top.toInt()})")
                         }
                     }
                     
-                    // Calculate depth for detected objects
                     val depthData = mutableMapOf<String, ObjectWithDepth>()
                     if (detections.isNotEmpty() && navigationEngine != null) {
                         for (obj in detections) {
@@ -152,16 +152,17 @@ class CombinedAnalyzer(
                         }
                     }
                     
-                    // Send to navigation with depth
                     navigationEngine?.processObstacles(detections)
                     
-                    // Update UI
+                    // ===== CRITICAL: Update overlay on MAIN thread with postInvalidate =====
                     withContext(Dispatchers.Main) {
-                        overlayView?.objects = detections
-                        overlayView?.postInvalidate()
+                        overlayView?.apply {
+                            objects = detections
+                            postInvalidate()  // Force redraw
+                        }
+                        Log.d("CombinedAnalyzer", "✓ Overlay updated with ${detections.size} objects")
                     }
                     
-                    // Send to DecisionEngine with depth data
                     decisionEngine.processWithDepth(depthData.values.toList())
                     
                 } catch (e: Exception) {
@@ -172,7 +173,6 @@ class CombinedAnalyzer(
             }
         }
          
-        // Background face recognition (if needed)
         if (memoryManager != null && frameCount % 10 == 0) {
             scope.launch(detectionDispatcher) {
                 val detections = overlayView?.objects ?: emptyList()
@@ -186,7 +186,6 @@ class CombinedAnalyzer(
         }
     }
     
-    // Calculate object position (left, center, right)
     private fun getObjectPosition(obj: DetectedObject, imageWidth: Int, imageHeight: Int): String {
         val centerX = obj.boundingBox.centerX()
         val leftThird = imageWidth / 3f
@@ -203,25 +202,22 @@ class CombinedAnalyzer(
         val task = bitmapQueue.poll() ?: return
         val bitmap = task.bitmap
         
-        // ONLY OCR - no object detection in reading mode
         if (isOCRing.compareAndSet(false, true)) {
             scope.launch(ocrDispatcher) {
                 try {
-                    val texts = ocrProcessor.detectSync(bitmap,rotationDegrees = task.rotationDegrees)
+                    val texts = ocrProcessor.detectSync(bitmap, rotationDegrees = task.rotationDegrees)
                     
                     if (texts.isNotEmpty()) {
                         Log.i("CombinedAnalyzer", "📖 READING MODE: ${texts.size} text blocks")
                         
-                        // Update UI - clear objects, show only text
                         withContext(Dispatchers.Main) {
                             overlayView?.apply {
-                                this.objects = emptyList()  // Clear object boxes
+                                this.objects = emptyList()
                                 this.texts = texts
                                 postInvalidate()
                             }
                         }
                         
-                        // Send ONLY text to decision engine
                         decisionEngine.process(emptyList(), texts)
                     }
                 } catch (e: Exception) {
@@ -241,7 +237,6 @@ class CombinedAnalyzer(
         
         val now = System.currentTimeMillis()
         
-        // Face recognition (throttled)
         if (now - lastFaceRecognitionTime > faceRecognitionCooldown) {
             scope.launch(detectionDispatcher) {
                 try {
@@ -263,7 +258,6 @@ class CombinedAnalyzer(
             }
         }
         
-        // Place recognition (throttled more)
         if (now - lastPlaceRecognitionTime > placeRecognitionCooldown) {
             scope.launch(detectionDispatcher) {
                 try {
