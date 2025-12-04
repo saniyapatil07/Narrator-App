@@ -8,10 +8,7 @@ import com.google.ar.core.exceptions.*
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 
-/**
- * DROP-IN REPLACEMENT for existing ARCoreManager
- * Same function names, optimized implementation
- */
+
 class ARCoreManager(private val context: Context) : DefaultLifecycleObserver {
 
     private var arSession: Session? = null

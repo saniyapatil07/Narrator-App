@@ -13,6 +13,9 @@ import android.util.Log
 import com.example.narratorapp.narration.TTSManager
 import java.util.*
 
+/**
+ * FIXED VERSION - Preserves spaces, handles multi-word names, checks all hypotheses
+ */
 class VoiceCommandManager(
     private val context: Context,
     private val ttsManager: TTSManager
@@ -29,17 +32,15 @@ class VoiceCommandManager(
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     
     private val hotwords = listOf(
-        "heynarrator", "oknarrator", "hellonarrator", "narrator",
-        "haynarrator", "heynavigator", "hienarrator"
+        "hey narrator", "ok narrator", "hello narrator", "narrator",
+        "hay narrator", "hey navigator", "hie narrator"
     )
     
-    // Track TTS state to avoid mic conflicts
     private var isTTSSpeaking = false
 
     init {
         initializeSpeechRecognizer()
         
-        // Monitor TTS state
         ttsManager.setOnSpeakingStateListener { speaking ->
             isTTSSpeaking = speaking
             if (speaking && isListening) {
@@ -50,6 +51,20 @@ class VoiceCommandManager(
                 handler.postDelayed({ resumeRecognition() }, 500)
             }
         }
+    }
+    
+    // ===== NEW: Proper text normalization that preserves spaces =====
+    private fun normalizeSpokenText(raw: String?): String {
+        if (raw.isNullOrBlank()) return ""
+        
+        // Lowercase, trim, collapse multiple spaces to one
+        val lower = raw.lowercase(Locale.getDefault()).trim()
+        val collapsed = lower.replace(Regex("\\s+"), " ")
+        
+        // Remove punctuation except apostrophes and dashes (for names like "O'Brien" or "Mary-Jane")
+        val cleaned = collapsed.replace(Regex("[^a-z0-9\\s''-]"), "")
+        
+        return cleaned
     }
     
     private fun initializeSpeechRecognizer() {
@@ -64,7 +79,6 @@ class VoiceCommandManager(
     }
     
     private fun isMicrophoneAvailable(): Boolean {
-        // Check if another app is using the microphone
         val mode = audioManager.mode
         val isMusicActive = audioManager.isMusicActive
         
@@ -107,14 +121,22 @@ class VoiceCommandManager(
     fun stopListening() {
         isListening = false
         handler.removeCallbacksAndMessages(null)
-        speechRecognizer?.stopListening()
+        try {
+            speechRecognizer?.cancel()
+        } catch (e: Exception) {
+            Log.e("VoiceCommandManager", "Error canceling recognizer", e)
+        }
         onListeningStateChanged?.invoke(false)
         Log.i("VoiceCommandManager", "Stopped listening")
     }
     
     private fun pauseRecognition() {
         if (isListening) {
-            speechRecognizer?.stopListening()
+            try {
+                speechRecognizer?.cancel()
+            } catch (e: Exception) {
+                Log.e("VoiceCommandManager", "Error pausing", e)
+            }
             Log.d("VoiceCommandManager", "Recognition paused")
         }
     }
@@ -135,8 +157,8 @@ class VoiceCommandManager(
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)  // Reduce overhead
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)  // Reduced from 5
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)  // Get multiple hypotheses
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
         }
@@ -173,6 +195,7 @@ class VoiceCommandManager(
             Log.d("VoiceCommandManager", "Speech ended")
         }
         
+        // ===== FIXED: Safer error handling with cancel() =====
         override fun onError(error: Int) {
             val errorMessage = when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH -> "NO_MATCH"
@@ -191,15 +214,23 @@ class VoiceCommandManager(
             // Handle audio errors specially
             if (error == SpeechRecognizer.ERROR_AUDIO) {
                 Log.e("VoiceCommandManager", "⚠️ Microphone conflict detected!")
+                try { 
+                    speechRecognizer?.cancel() 
+                } catch (e: Exception) {}
+                
                 handler.postDelayed({
                     if (isListening && isMicrophoneAvailable()) {
                         startRecognition()
                     }
-                }, 2000)  // Longer delay for audio errors
+                }, 2000)
                 return
             }
             
-            // Normal restart
+            // Normal restart: cancel then restart after a short delay
+            try { 
+                speechRecognizer?.cancel() 
+            } catch (e: Exception) {}
+            
             if (isListening && !isTTSSpeaking) {
                 handler.postDelayed({
                     if (isListening) startRecognition()
@@ -207,6 +238,7 @@ class VoiceCommandManager(
             }
         }
         
+        // ===== FIXED: Check all hypotheses, preserve spaces =====
         override fun onResults(results: Bundle?) {
             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             
@@ -220,51 +252,80 @@ class VoiceCommandManager(
                 return
             }
             
-            val rawSpokenText = matches[0]
-            val cleanText = rawSpokenText.filter { !it.isWhitespace() }.lowercase()
+            val firstNonEmpty = matches.firstOrNull { !it.isNullOrBlank() } ?: matches[0]
+            val rawSpokenText = firstNonEmpty
+            val normalized = normalizeSpokenText(rawSpokenText)
             
-            Log.i("VoiceDebug", "📣 '$rawSpokenText' → '$cleanText'")
+            Log.i("VoiceDebug", "📣 Raw: '$rawSpokenText' → Normalized: '$normalized'")
             
+            // HOTWORD MODE: Check all hypotheses for hotword
             if (isHotwordMode) {
-                val foundHotword = hotwords.find { cleanText.contains(it) }
+                val foundHotword = matches
+                    .map { normalizeSpokenText(it) }
+                    .firstOrNull { hyp ->
+                        hotwords.any { hw ->
+                            // Allow optional spaces in hotword
+                            hyp.contains(hw) || hyp.contains(hw.replace(" ", ""))
+                        }
+                    }
                 
                 if (foundHotword != null) {
-                    Log.i("VoiceCommandManager", "✓ HOTWORD: '$foundHotword'")
-                    ttsManager.speak("Yes?")
+                    Log.i("VoiceCommandManager", "✓ HOTWORD detected")
                     
+                    // Pause recognition cleanly
+                    try { 
+                        speechRecognizer?.cancel() 
+                    } catch (e: Exception) {}
+                    
+                    ttsManager.speak("Yes?", TTSManager.Priority.HIGH)
                     isHotwordMode = false
-                    // Wait for TTS to finish before listening for command
+                    
                     handler.postDelayed({
                         if (isListening && !isTTSSpeaking) {
                             Log.i("VoiceCommandManager", "→ COMMAND mode")
                             startRecognition()
                         }
-                    }, 2000)  // Give TTS time to finish
+                    }, 600)
                 } else {
-                    Log.d("VoiceCommandManager", "No hotword, continuing...")
-                    handler.postDelayed({
-                        if (isListening && !isTTSSpeaking) startRecognition()
+                    // No hotword - continue listening
+                    handler.postDelayed({ 
+                        if (isListening && !isTTSSpeaking) startRecognition() 
                     }, 500)
                 }
-            } else {
-                // Command Mode
-                val command = parseCommand(cleanText)
-                
-                if (command != null) {
-                    Log.i("VoiceCommandManager", "✓ COMMAND: ${command.getDescription()}")
-                    onCommandRecognized?.invoke(command)
-                    isHotwordMode = true
-                } else {
-                    Log.w("VoiceCommandManager", "❌ Unknown: '$cleanText'")
-                    ttsManager.speak("I didn't understand")
+                return
+            }
+            
+            // COMMAND MODE: Check all hypotheses for valid command
+            var commandFound: VoiceCommand? = null
+            for (hyp in matches) {
+                val norm = normalizeSpokenText(hyp)
+                val parsed = parseCommand(norm)
+                if (parsed != null) {
+                    commandFound = parsed
+                    Log.i("VoiceCommandManager", "Found command in hypothesis: '$hyp'")
+                    break
                 }
+            }
+            
+            if (commandFound != null) {
+                Log.i("VoiceCommandManager", "✓ COMMAND: ${commandFound.getDescription()}")
+                onCommandRecognized?.invoke(commandFound)
+                isHotwordMode = true
                 
-                handler.postDelayed({
+                handler.postDelayed({ 
                     if (isListening && !isTTSSpeaking) {
                         Log.i("VoiceCommandManager", "→ HOTWORD mode")
                         startRecognition()
                     }
-                }, 2000)
+                }, 600)
+            } else {
+                Log.w("VoiceCommandManager", "❌ Unknown: '$normalized'")
+                ttsManager.speak("I didn't understand")
+                isHotwordMode = true
+                
+                handler.postDelayed({ 
+                    if (isListening && !isTTSSpeaking) startRecognition() 
+                }, 1000)
             }
         }
         
@@ -272,31 +333,77 @@ class VoiceCommandManager(
         override fun onEvent(eventType: Int, params: Bundle?) {}
     }
     
-    private fun parseCommand(cleanText: String): VoiceCommand? {
+    // ===== FIXED: Preserve spaces, extract multi-word names =====
+    private fun parseCommand(normalizedText: String): VoiceCommand? {
+        val t = normalizedText
+        
         return when {
-            cleanText.contains("startnavigation") -> VoiceCommand.StartNavigation
-            cleanText.contains("stopnavigation") -> VoiceCommand.StopNavigation
-            cleanText.contains("recordwaypoint") -> VoiceCommand.RecordWaypoint
-            cleanText.contains("whereami") || cleanText.contains("location") -> VoiceCommand.GetLocation
-            cleanText.contains("readtext") || cleanText.contains("readingmode") -> VoiceCommand.EnableReadingMode
-            cleanText.contains("stopreading") || cleanText.contains("normalmode") -> VoiceCommand.DisableReadingMode
-            cleanText.startsWith("learnface") -> {
-                val name = cleanText.removePrefix("learnface").trim()
-                if (name.isNotEmpty()) VoiceCommand.LearnFace(name) else VoiceCommand.LearnFacePrompt
+            t.contains("start navigation") || t.contains("start nav") -> 
+                VoiceCommand.StartNavigation
+                
+            t.contains("stop navigation") || t.contains("stop nav") -> 
+                VoiceCommand.StopNavigation
+                
+            t.contains("record waypoint") -> 
+                VoiceCommand.RecordWaypoint
+                
+            t.contains("where am i") || t.contains("what is my location") || t.contains("my location") -> 
+                VoiceCommand.GetLocation
+                
+            t.contains("read text") || t.contains("reading mode") || t.contains("read mode") -> 
+                VoiceCommand.EnableReadingMode
+                
+            t.contains("stop reading") || t.contains("normal mode") -> 
+                VoiceCommand.DisableReadingMode
+            
+            // ===== CRITICAL: Extract multi-word names =====
+            t.startsWith("learn face") -> {
+                val name = t.removePrefix("learn face").trim()
+                if (name.isNotEmpty()) {
+                    Log.i("VoiceCommandManager", "Extracted face name: '$name'")
+                    VoiceCommand.LearnFace(name)
+                } else {
+                    VoiceCommand.LearnFacePrompt
+                }
             }
-            cleanText.startsWith("learnplace") -> {
-                val name = cleanText.removePrefix("learnplace").trim()
-                if (name.isNotEmpty()) VoiceCommand.LearnPlace(name) else VoiceCommand.LearnPlacePrompt
+            
+            t.startsWith("learn place") -> {
+                val name = t.removePrefix("learn place").trim()
+                if (name.isNotEmpty()) {
+                    Log.i("VoiceCommandManager", "Extracted place name: '$name'")
+                    VoiceCommand.LearnPlace(name)
+                } else {
+                    VoiceCommand.LearnPlacePrompt
+                }
             }
-            cleanText.contains("whoisthis") -> VoiceCommand.RecognizeFace
-            cleanText.contains("whereisthis") -> VoiceCommand.RecognizePlace
-            cleanText.contains("whatdoyousee") || cleanText.contains("describescene") -> VoiceCommand.DescribeScene
-            cleanText.contains("findobject") -> VoiceCommand.FindObject
-            cleanText.contains("increasevolume") || cleanText.contains("volumeup") -> VoiceCommand.IncreaseVolume
-            cleanText.contains("decreasevolume") || cleanText.contains("volumedown") -> VoiceCommand.DecreaseVolume
-            cleanText.contains("pause") -> VoiceCommand.Pause
-            cleanText.contains("resume") -> VoiceCommand.Resume
-            cleanText.contains("help") -> VoiceCommand.Help
+            
+            t.contains("who is this") || t.contains("identify face") || t.contains("recognize face") -> 
+                VoiceCommand.RecognizeFace
+                
+            t.contains("where is this") || t.contains("identify place") || t.contains("recognize place") -> 
+                VoiceCommand.RecognizePlace
+                
+            t.contains("what do you see") || t.contains("describe scene") -> 
+                VoiceCommand.DescribeScene
+                
+            t.contains("find object") -> 
+                VoiceCommand.FindObject
+                
+            t.contains("increase volume") || t.contains("volume up") -> 
+                VoiceCommand.IncreaseVolume
+                
+            t.contains("decrease volume") || t.contains("volume down") -> 
+                VoiceCommand.DecreaseVolume
+                
+            t.contains("pause") -> 
+                VoiceCommand.Pause
+                
+            t.contains("resume") -> 
+                VoiceCommand.Resume
+                
+            t.contains("help") -> 
+                VoiceCommand.Help
+                
             else -> null
         }
     }

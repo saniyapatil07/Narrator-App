@@ -26,43 +26,44 @@ class MemoryManager(private val context: Context) {
     }
     
     private suspend fun loadCacheFromDatabase() {
-        try {
-            val allEmbeddings = dao.getAllEmbeddings()
-            allEmbeddings.forEach { entity ->
-                val embedding = stringToFloatArray(entity.embedding)
-                when (entity.type) {
-                    "face" -> faceCache[entity.label] = embedding
-                    "place" -> placeCache[entity.label] = embedding
-                }
+    try {
+        val allEmbeddings = dao.getAllEmbeddings()
+        allEmbeddings.forEach { entity ->
+            // ✅ No parsing needed - already FloatArray
+            when (entity.type) {
+                "face" -> faceCache[entity.labelLower] = entity.embedding
+                "place" -> placeCache[entity.labelLower] = entity.embedding
             }
-            Log.d("MemoryManager", "Loaded ${faceCache.size} faces and ${placeCache.size} places")
-        } catch (e: Exception) {
-            Log.e("MemoryManager", "Error loading cache", e)
         }
+        Log.d("MemoryManager", "Loaded ${faceCache.size} faces and ${placeCache.size} places")
+    } catch (e: Exception) {
+        Log.e("MemoryManager", "Error loading cache", e)
     }
+}
     
     suspend fun learnFace(bitmap: Bitmap, personName: String): Boolean {
-        return withContext(Dispatchers.IO) {
-            try {
-                val embedding = faceRecognizer.getEmbedding(bitmap)
-                
-                val entity = EmbeddingEntity(
-                    label = personName,
-                    type = "face",
-                    embedding = floatArrayToString(embedding)
-                )
-                dao.insertEmbedding(entity)
-                
-                faceCache[personName] = embedding
-                
-                Log.d("MemoryManager", "Learned face: $personName")
-                true
-            } catch (e: Exception) {
-                Log.e("MemoryManager", "Error learning face", e)
-                false
-            }
+    return withContext(Dispatchers.IO) {
+        try {
+            val embedding = faceRecognizer.getEmbedding(bitmap)
+            
+            val entity = EmbeddingEntity(
+                label = personName,
+                labelLower = personName.lowercase(),  // ✅ Add normalized
+                type = "face",
+                embedding = embedding  // ✅ Direct FloatArray
+            )
+            dao.insertEmbedding(entity)
+            
+            faceCache[personName.lowercase()] = embedding  // ✅ Use lowercase key
+            
+            Log.d("MemoryManager", "Learned face: $personName")
+            true
+        } catch (e: Exception) {
+            Log.e("MemoryManager", "Error learning face", e)
+            false
         }
     }
+}
     
     suspend fun recognizeFace(bitmap: Bitmap): RecognitionResult? {
         return withContext(Dispatchers.Default) {
@@ -99,27 +100,29 @@ class MemoryManager(private val context: Context) {
     }
     
     suspend fun learnPlace(bitmap: Bitmap, placeName: String): Boolean {
-        return withContext(Dispatchers.IO) {
-            try {
-                val embedding = placeRecognizer.getEmbedding(bitmap)
-                
-                val entity = EmbeddingEntity(
-                    label = placeName,
-                    type = "place",
-                    embedding = floatArrayToString(embedding)
-                )
-                dao.insertEmbedding(entity)
-                
-                placeCache[placeName] = embedding
-                
-                Log.d("MemoryManager", "Learned place: $placeName")
-                true
-            } catch (e: Exception) {
-                Log.e("MemoryManager", "Error learning place", e)
-                false
-            }
+    return withContext(Dispatchers.IO) {
+        try {
+            val embedding = placeRecognizer.getEmbedding(bitmap)
+            
+            val entity = EmbeddingEntity(
+                label = placeName,
+                labelLower = placeName.lowercase(),  // ✅ Add normalized
+                type = "place",
+                embedding = embedding  // ✅ Direct FloatArray
+            )
+            dao.insertEmbedding(entity)
+            
+            placeCache[placeName.lowercase()] = embedding  // ✅ Use lowercase key
+            
+            Log.d("MemoryManager", "Learned place: $placeName")
+            true
+        } catch (e: Exception) {
+            Log.e("MemoryManager", "Error learning place", e)
+            false
         }
     }
+}
+
     
     suspend fun recognizePlace(bitmap: Bitmap): RecognitionResult? {
         return withContext(Dispatchers.Default) {
@@ -156,14 +159,21 @@ class MemoryManager(private val context: Context) {
     }
     
     suspend fun forget(label: String, type: RecognitionType) {
-        withContext(Dispatchers.IO) {
-            dao.deleteByLabel(label)
-            when (type) {
-                RecognitionType.FACE -> faceCache.remove(label)
-                RecognitionType.PLACE -> placeCache.remove(label)
-            }
+    withContext(Dispatchers.IO) {
+        val labelLower = label.lowercase()
+        val typeStr = when (type) {
+            RecognitionType.FACE -> "face"
+            RecognitionType.PLACE -> "place"
+        }
+        
+        dao.deleteByLabelAndType(labelLower, typeStr)
+        
+        when (type) {
+            RecognitionType.FACE -> faceCache.remove(labelLower)
+            RecognitionType.PLACE -> placeCache.remove(labelLower)
         }
     }
+}
     
     suspend fun getAllFaces(): List<String> {
         return withContext(Dispatchers.IO) {

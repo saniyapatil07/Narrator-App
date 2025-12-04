@@ -14,6 +14,9 @@ import java.nio.ByteOrder
 import kotlin.math.max
 import kotlin.math.min
 
+/**
+ * FIXED VERSION - Correct YOLO coordinate normalization
+ */
 class ObjectDetector(context: Context) {
 
     private val confidenceThreshold = 0.1f
@@ -36,7 +39,6 @@ class ObjectDetector(context: Context) {
         "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
     )
     
-    // Pre-allocated buffers for zero-copy inference
     private lateinit var inputBuffer: ByteBuffer
     private lateinit var outputBuffer: Array<Array<FloatArray>>
 
@@ -44,28 +46,25 @@ class ObjectDetector(context: Context) {
         try {
             val modelBuffer = FileUtil.loadMappedFile(context, "model.tflite")
             
-            // CRITICAL: Try GPU first, fallback to CPU with NNAPI
             val options = Interpreter.Options().apply {
                 setNumThreads(numThreads)
                 
-                // Try GPU delegation
                 val compatList = CompatibilityList()
                 if (compatList.isDelegateSupportedOnThisDevice) {
                     try {
                         val delegateOptions = compatList.bestOptionsForThisDevice
                         gpuDelegate = GpuDelegate(delegateOptions)
                         addDelegate(gpuDelegate)
-                        Log.i("OptimizedDetector", "✓ GPU delegate enabled")
+                        Log.i("ObjectDetector", "✓ GPU delegate enabled")
                     } catch (e: Exception) {
-                        Log.w("OptimizedDetector", "GPU delegate failed, using NNAPI", e)
-                        setUseNNAPI(true)  // Fallback to NNAPI
+                        Log.w("ObjectDetector", "GPU delegate failed, using NNAPI", e)
+                        setUseNNAPI(true)
                     }
                 } else {
-                    Log.i("OptimizedDetector", "GPU not available, using NNAPI")
+                    Log.i("ObjectDetector", "GPU not available, using NNAPI")
                     setUseNNAPI(true)
                 }
                 
-                // Allow FP16 quantization for faster inference
                 setAllowFp16PrecisionForFp32(true)
             }
             
@@ -74,8 +73,7 @@ class ObjectDetector(context: Context) {
             val inputTensor = interpreter!!.getInputTensor(0)
             val outputTensor = interpreter!!.getOutputTensor(0)
             
-            // Pre-allocate buffers
-            val inputBufferSize = inputSize * inputSize * 3 * 4  // FLOAT32
+            val inputBufferSize = inputSize * inputSize * 3 * 4
             inputBuffer = ByteBuffer.allocateDirect(inputBufferSize).apply {
                 order(ByteOrder.nativeOrder())
             }
@@ -85,14 +83,13 @@ class ObjectDetector(context: Context) {
                 Array(outputShape[1]) { FloatArray(outputShape[2]) }
             }
             
-            Log.i("OptimizedDetector", "=== OPTIMIZED MODEL INFO ===")
-            Log.i("OptimizedDetector", "Input: ${inputTensor.shape().contentToString()}")
-            Log.i("OptimizedDetector", "Output: ${outputShape.contentToString()}")
-            Log.i("OptimizedDetector", "GPU: ${gpuDelegate != null}, NNAPI: ${options.useNNAPI}")
-            Log.i("OptimizedDetector", "============================")
+            Log.i("ObjectDetector", "=== MODEL INFO ===")
+            Log.i("ObjectDetector", "Input: ${inputTensor.shape().contentToString()}")
+            Log.i("ObjectDetector", "Output: ${outputShape.contentToString()}")
+            Log.i("ObjectDetector", "GPU: ${gpuDelegate != null}, NNAPI: ${options.useNNAPI}")
             
         } catch (e: Exception) {
-            Log.e("OptimizedDetector", "Error loading model", e)
+            Log.e("ObjectDetector", "Error loading model", e)
         }
     }
 
@@ -101,23 +98,28 @@ class ObjectDetector(context: Context) {
 
         val resizedBitmap = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
         
-        // Reuse pre-allocated buffer
-        inputBuffer.rewind()
-        bitmapToByteBuffer(resizedBitmap, inputBuffer)
+        try {
+            inputBuffer.rewind()
+            bitmapToByteBuffer(resizedBitmap, inputBuffer)
 
-        val startTime = SystemClock.uptimeMillis()
-        interpreter!!.run(inputBuffer, outputBuffer)
-        val inferenceTime = SystemClock.uptimeMillis() - startTime
-        
-        // Only log periodically to reduce overhead
-        if (Math.random() < 0.1) {  // 10% of frames
-            Log.i("OptimizedDetector", "Inference: ${inferenceTime}ms")
+            val startTime = SystemClock.uptimeMillis()
+            interpreter!!.run(inputBuffer, outputBuffer)
+            val inferenceTime = SystemClock.uptimeMillis() - startTime
+            
+            if (Math.random() < 0.1) {
+                Log.i("ObjectDetector", "Inference: ${inferenceTime}ms")
+            }
+
+            val detections = decodeYOLO(outputBuffer[0], bitmap.width, bitmap.height)
+            val finalDetections = nonMaxSuppression(detections)
+            
+            return finalDetections
+        } finally {
+            // Clean up scaled bitmap
+            if (resizedBitmap != bitmap) {
+                resizedBitmap.recycle()
+            }
         }
-
-        val detections = decodeYOLO(outputBuffer[0], bitmap.width, bitmap.height)
-        val finalDetections = nonMaxSuppression(detections)
-        
-        return finalDetections
     }
 
     private fun bitmapToByteBuffer(bitmap: Bitmap, buffer: ByteBuffer) {
@@ -126,7 +128,6 @@ class ObjectDetector(context: Context) {
         val intValues = IntArray(inputSize * inputSize)
         bitmap.getPixels(intValues, 0, inputSize, 0, 0, inputSize, inputSize)
 
-        // ImageNet normalization
         val MEAN_R = 123.675f
         val MEAN_G = 116.28f
         val MEAN_B = 103.53f
@@ -145,6 +146,7 @@ class ObjectDetector(context: Context) {
         }
     }
 
+    // ===== CRITICAL FIX: Correct YOLO coordinate decoding =====
     private fun decodeYOLO(output: Array<FloatArray>, originalWidth: Int, originalHeight: Int): MutableList<DetectedObject> {
         val results = mutableListOf<DetectedObject>()
         
@@ -153,6 +155,7 @@ class ObjectDetector(context: Context) {
             
             if (objectness < confidenceThreshold) continue
             
+            // Find best class
             var maxClassScore = 0f
             var classId = -1
             for (i in 5 until prediction.size) {
@@ -165,19 +168,45 @@ class ObjectDetector(context: Context) {
             val confidence = objectness * maxClassScore
             if (confidence < confidenceThreshold) continue
 
-            val xCenter = prediction[0] * originalWidth
-            val yCenter = prediction[1] * originalHeight
-            val width = prediction[2] * originalWidth
-            val height = prediction[3] * originalHeight
+            // ===== CRITICAL FIX: YOLO outputs are ALREADY normalized [0,1] =====
+            // prediction[0] = center_x (0.0 to 1.0)
+            // prediction[1] = center_y (0.0 to 1.0)
+            // prediction[2] = width (0.0 to 1.0)
+            // prediction[3] = height (0.0 to 1.0)
             
-            val x = xCenter - (width / 2)
-            val y = yCenter - (height / 2)
+            val xCenter = prediction[0]  // Already 0-1
+            val yCenter = prediction[1]  // Already 0-1
+            val width = prediction[2]    // Already 0-1
+            val height = prediction[3]   // Already 0-1
+            
+            // Convert center coordinates to top-left corner
+            val xMin = xCenter - (width / 2f)
+            val yMin = yCenter - (height / 2f)
+            val xMax = xMin + width
+            val yMax = yMin + height
+            
+            // Now scale to original image dimensions
+            val left = xMin * originalWidth
+            val top = yMin * originalHeight
+            val right = xMax * originalWidth
+            val bottom = yMax * originalHeight
+            
+            // Clamp to image bounds
+            val clampedLeft = left.coerceIn(0f, originalWidth.toFloat())
+            val clampedTop = top.coerceIn(0f, originalHeight.toFloat())
+            val clampedRight = right.coerceIn(0f, originalWidth.toFloat())
+            val clampedBottom = bottom.coerceIn(0f, originalHeight.toFloat())
+            
+            // Validate box size
+            if (clampedRight <= clampedLeft || clampedBottom <= clampedTop) {
+                continue  // Invalid box
+            }
 
             results.add(
                 DetectedObject(
                     label = labels.getOrElse(classId) { "Unknown" },
                     confidence = confidence,
-                    boundingBox = RectF(x, y, x + width, y + height)
+                    boundingBox = RectF(clampedLeft, clampedTop, clampedRight, clampedBottom)
                 )
             )
         }
@@ -226,6 +255,6 @@ class ObjectDetector(context: Context) {
     fun cleanup() {
         gpuDelegate?.close()
         interpreter?.close()
-        Log.d("OptimizedDetector", "Cleaned up")
+        Log.d("ObjectDetector", "Cleaned up")
     }
 }

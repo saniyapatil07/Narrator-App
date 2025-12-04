@@ -35,6 +35,13 @@ import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import java.util.Locale
+
 
 class MainActivity : ComponentActivity() {
 
@@ -49,6 +56,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var voiceIndicator: ImageView
     private lateinit var statusText: TextView
     
+    private var voiceInputRecognizer: SpeechRecognizer? = null
+    private var voiceInputCallback: ((String) -> Unit)? = null
+    private val voiceInputHandler = Handler(Looper.getMainLooper())
+
     private var voiceCommandService: VoiceCommandService? = null
     private var serviceBound = false
     private var combinedAnalyzer: CombinedAnalyzer? = null
@@ -361,36 +372,172 @@ findViewById<Button>(R.id.btnAnnounceDetections)?.setOnClickListener {
     }
 
     private fun showLearnFaceDialog() {
-        val input = TextInputEditText(this)
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Learn New Face")
-            .setMessage("Enter person's name")
-            .setView(input)
-            .setPositiveButton("Capture") { _, _ ->
-                val name = input.text.toString()
-                if (name.isNotBlank()) {
-                    captureFaceForLearning(name)
-                }
+    ttsManager.speak("Please say the person's name now", TTSManager.Priority.HIGH)
+    
+    // Wait for TTS to finish, then start listening
+    voiceInputHandler.postDelayed({
+        startVoiceCapture { spokenName ->
+            val cleanName = spokenName.trim()
+            
+            if (cleanName.isEmpty()) {
+                ttsManager.speak("No name detected. Cancelled.")
+                return@startVoiceCapture
             }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
+            
+            // Confirm with user
+            ttsManager.speak("I heard: $cleanName. Say confirm to save, retry to try again, or cancel")
+            
+            voiceInputHandler.postDelayed({
+                startVoiceCapture { response ->
+                    when (response.lowercase().replace(" ", "")) {
+                        "confirm" -> {
+                            captureFaceForLearning(cleanName)
+                        }
+                        "retry" -> {
+                            showLearnFaceDialog()  // Try again
+                        }
+                        "cancel" -> {
+                            ttsManager.speak("Cancelled")
+                        }
+                        else -> {
+                            ttsManager.speak("I didn't understand. Cancelled.")
+                        }
+                    }
+                }
+            }, 2500)  // Wait for TTS to finish
+        }
+    }, 2000)  // Wait for TTS to finish
+}
 
     private fun showLearnPlaceDialog() {
-        val input = TextInputEditText(this)
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Learn New Place")
-            .setMessage("Enter place name")
-            .setView(input)
-            .setPositiveButton("Capture") { _, _ ->
-                val name = input.text.toString()
-                if (name.isNotBlank()) {
-                    capturePlaceForLearning(name)
-                }
+    ttsManager.speak("Please say the place name now", TTSManager.Priority.HIGH)
+    
+    voiceInputHandler.postDelayed({
+        startVoiceCapture { spokenName ->
+            val cleanName = spokenName.trim()
+            
+            if (cleanName.isEmpty()) {
+                ttsManager.speak("No name detected. Cancelled.")
+                return@startVoiceCapture
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+            
+            ttsManager.speak("I heard: $cleanName. Say confirm to save, retry to try again, or cancel")
+            
+            voiceInputHandler.postDelayed({
+                startVoiceCapture { response ->
+                    when (response.lowercase().replace(" ", "")) {
+                        "confirm" -> {
+                            capturePlaceForLearning(cleanName)
+                        }
+                        "retry" -> {
+                            showLearnPlaceDialog()
+                        }
+                        "cancel" -> {
+                            ttsManager.speak("Cancelled")
+                        }
+                        else -> {
+                            ttsManager.speak("I didn't understand. Cancelled.")
+                        }
+                    }
+                }
+            }, 2500)
+        }
+    }, 2000)
+}
+
+private fun startVoiceCapture(onResult: (String) -> Unit) {
+    // Pause main voice service temporarily
+    voiceCommandService?.stopListening()
+    
+    voiceInputCallback = onResult
+    
+    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
     }
+    
+    voiceInputRecognizer?.destroy()
+    voiceInputRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+    voiceInputRecognizer?.setRecognitionListener(object : RecognitionListener {
+        override fun onResults(results: Bundle?) {
+            val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            val spokenText = matches?.firstOrNull() ?: ""
+            
+            Log.i("VoiceInput", "Captured: '$spokenText'")
+            
+            voiceInputRecognizer?.destroy()
+            voiceInputRecognizer = null
+            
+            // Resume main voice service
+            voiceInputHandler.postDelayed({
+                voiceCommandService?.startListening(startWithHotword = true)
+            }, 1000)
+            
+            voiceInputCallback?.invoke(spokenText)
+            voiceInputCallback = null
+        }
+        
+        override fun onError(error: Int) {
+            val errorMsg = when (error) {
+                SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected"
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Timeout"
+                SpeechRecognizer.ERROR_AUDIO -> "Audio error"
+                else -> "Recognition error $error"
+            }
+            
+            Log.e("VoiceInput", "Error: $errorMsg")
+            
+            voiceInputRecognizer?.destroy()
+            voiceInputRecognizer = null
+            
+            // Resume main voice service
+            voiceInputHandler.postDelayed({
+                voiceCommandService?.startListening(startWithHotword = true)
+            }, 1000)
+            
+            voiceInputCallback?.invoke("")
+            voiceInputCallback = null
+        }
+        
+        override fun onReadyForSpeech(params: Bundle?) {
+            Log.d("VoiceInput", "Ready for speech")
+            runOnUiThread {
+                statusText.text = "Listening..."
+            }
+        }
+        
+        override fun onBeginningOfSpeech() {
+            Log.d("VoiceInput", "Speech detected")
+        }
+        
+        override fun onEndOfSpeech() {
+            Log.d("VoiceInput", "Speech ended")
+            runOnUiThread {
+                statusText.text = "Processing..."
+            }
+        }
+        
+        override fun onRmsChanged(rmsdB: Float) {}
+        override fun onBufferReceived(buffer: ByteArray?) {}
+        override fun onPartialResults(partialResults: Bundle?) {}
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+    })
+    
+    try {
+        voiceInputRecognizer?.startListening(intent)
+        runOnUiThread {
+            statusText.text = "Say the name..."
+            voiceIndicator.visibility = ImageView.VISIBLE
+        }
+    } catch (e: Exception) {
+        Log.e("VoiceInput", "Failed to start recognition", e)
+        voiceInputCallback?.invoke("")
+        voiceInputCallback = null
+    }
+}
 
     private fun showMemoriesDialog() {
         lifecycleScope.launch {
@@ -513,7 +660,11 @@ findViewById<Button>(R.id.btnAnnounceDetections)?.setOnClickListener {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+
+        voiceInputRecognizer?.destroy()
+        voiceInputRecognizer = null
+        voiceInputHandler.removeCallbacksAndMessages(null)
+        
         
         if (serviceBound) {
             unbindService(serviceConnection)
@@ -535,5 +686,6 @@ findViewById<Button>(R.id.btnAnnounceDetections)?.setOnClickListener {
         }
         
         arCoreManager.cleanup()
+        super.onDestroy()
     }
 }
